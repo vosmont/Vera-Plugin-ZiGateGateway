@@ -4,4 +4,4 @@ ZiGate gateway for the Vera
 
 Designed for [Vera Control, Ltd.](http://getvera.com) Home Controllers (UI7).
 
-[ZiGate](http://zigate.fr) is a universal ZigBee gateway for smarthome. 
+This plugin is a gateway to [ZiGate](http://zigate.fr), and brings compatibility with the ZigBee network. 
