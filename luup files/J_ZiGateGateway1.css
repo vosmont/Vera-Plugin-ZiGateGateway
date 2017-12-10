@@ -1,0 +1,57 @@
+.zigate-panel { position: relative; padding: 5px; }
+.zigate-panel table { width: 100%; }
+.zigate-panel th { text-align: center; background-color: #ccc; }
+.zigate-panel td { padding: 5px; border: 1px solid #ccc; vertical-align: top; }
+.zigate-panel label { font-weight: normal }
+.zigate-panel button { display: inline-block; }
+.zigate-panel button.highlighted { background: #006d46; color: #fff; }
+
+.zigate-hidden { display: none; }
+.zigate-error { color:red; }
+.zigate-explanation { margin: 5px; padding: 5px; border: 1px solid; background: #FFFF88}
+.zigate-toolbar { height: 25px; text-align: right; margin: 5px; }
+
+.zigate-association-room { font-weight: bold; width: 100%; background: #ccc; }
+div.zigate-association { padding-left: 20px; }
+div.zigate-association label span { padding: 4px 0 0 2px; }
+span.zigate-association { margin-right: 5px; }
+span.zigate-association span { padding: 1px; }
+.zigate-association-device .ziblue-short-press { color: white; background: orange; border: 1px solid orange; }
+.zigate-association-device .ziblue-long-press  { color: white; background: red; border: 1px solid red; }
+.zigate-association-scene .ziblue-short-press  { color: white; background: blue; border: 1px solid blue; }
+.zigate-association-scene .ziblue-long-press   { color: white; background: green; border: 1px solid green; }
+.zigate-association-zibluedevice .ziblue-short-press  { color: white; background: purple; border: 1px solid purple; }
+
+.ziblue-short-press {}
+table.zigate-feature-group td { padding: 0px; }
+.ziblue-long-press { border: red; }
+
+.zigate-protocol-name { font-weight: bold; }
+.zigate-protocol-id { font-weight: bold; }
+.zigate-device-name { font-weight: bold; }
+.zigate-feature-name { font-weight: bold; font-style: italic; }
+.zigate-feature-state { font-style: italic; }
+
+#zigate-device-actions { position: absolute; background: #FFF; border: 2px solid #AAA; white-space: nowrap; }
+#zigate-device-actions td { padding: 5px; }
+#zigate-device-actions button { margin: 2px; }
+#zigate-device-association {
+	position: absolute; top: 0px; left: 0px;
+	width: 100%;
+	background: #FFF; border: 2px solid #AAA;
+}
+#zigate-device-params {
+	position: absolute; top: 0px; left: 0px;
+	width: 100%;
+	background: #FFF; border: 2px solid #AAA;
+}
+
+#zigate-donate { text-align: center; width: 70%; margin: auto; }
+#zigate-donate form { height: 50px; }
+
+.zigate-feature-group td { border: 0 }
+.zigate-setting { margin-top: 10px; border-radius: 25px; padding: 1px 25px; text-align: left; }
+.zigate-setting span { display: inline-block; width: 30%; }
+h3 div.ui-widget-content {
+	color: #fff !important; background-color: #00a652 !important;
+}

@@ -1,0 +1,92 @@
+<?xml version="1.0"?>
+<implementation>
+	<functions>
+		-- Sometimes the 'incoming' function is executed before the 'startup'
+		-- function has run, and therefore, before the plugin initialization.
+		-- Most of the time this happens when the protocol is 'raw',
+		-- which this plugin uses.
+		local fc = 0 -- failure counter
+		local plugin
+
+		function zigate_gateway_startup (lul_device)
+			luup.log("ZiGate Gateway startup")
+			plugin = require("L_ZiGateGateway1")
+			return plugin.init(lul_device)
+		end
+	</functions>
+	<startup>zigate_gateway_startup</startup>
+	<incoming>
+		<lua>
+			-- If the 'startup' function hasn't run yet,
+			-- 'plugin' and 'handleIncoming' are not defined.
+			if ( not plugin or not plugin.Network ) then
+				fc = fc + 1
+				luup.log( "(ZiGateGateway::incoming) fc=" .. tostring(  fc) )
+			else
+				plugin.Network.receive( lul_data )
+			end
+		</lua>
+	</incoming>
+	<actionList>
+		<!-- Security Sensor -->
+		<action>
+			<serviceId>urn:micasaverde-com:serviceId:SecuritySensor1</serviceId>
+			<name>SetArmed</name>
+			<job>
+				return plugin.Child.setArmed( lul_device, lul_settings.newArmedValue )
+			</job>
+		</action>
+		<!-- SwitchPower -->
+		<action>
+			<serviceId>urn:upnp-org:serviceId:SwitchPower1</serviceId>
+			<name>SetTarget</name>
+			<job>
+				return plugin.Child.setTarget( lul_device, lul_settings.newTargetValue )
+			</job>
+		</action>
+		<!-- Dimming -->
+		<action>
+			<serviceId>urn:upnp-org:serviceId:Dimming1</serviceId>
+			<name>SetLoadLevelTarget</name>
+			<job>
+				return plugin.Child.setLoadLevelTarget( lul_device, lul_settings.newLoadlevelTarget )
+			</job>
+		</action>
+		<!-- ZiGate gateway -->
+		<action>
+			<serviceId>urn:upnp-org:serviceId:ZiGateGateway1</serviceId>
+			<name>SendMessage</name>
+			<job>
+				return plugin.sendMessage( lul_settings.type, lul_settings.data )
+			</job>
+		</action>
+		<action>
+			<serviceId>urn:upnp-org:serviceId:ZiGateGateway1</serviceId>
+			<name>Refresh</name>
+			<job>
+				return plugin.refresh()
+			</job>
+		</action>
+		<action>
+			<serviceId>urn:upnp-org:serviceId:ZiGateGateway1</serviceId>
+			<name>CreateDevices</name>
+			<job>
+				return plugin.createDevices( lul_settings.items )
+			</job>
+		</action>
+		<action>
+			<serviceId>urn:upnp-org:serviceId:ZiGateGateway1</serviceId>
+			<name>Inclusion</name>
+			<run>
+				return plugin.startInclusion()
+			</run>
+		</action>
+		<action>
+			<serviceId>urn:upnp-org:serviceId:ZiGateGateway1</serviceId>
+			<name>Associate</name>
+			<run>
+				return plugin.associate( lul_settings.address, lul_settings.endPoint, lul_settings.feature, lul_settings.association )
+			</run>
+		</action>
+	</actionList>
+</implementation>
