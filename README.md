@@ -22,22 +22,23 @@ For specific manipulations (settings, association), the plugin has its own User 
 Plug the ZiGate USB dongle into an Vera's USB port.
 
 
-## Installation
+## Installation on legacy Vera
 
 #### Get the plugin
+
 - Mios Marketplace
 
   This plugin is not available on the Mios Marketplace for the moment. This could change if Vera Control, Ltd. makes it more "developper friendly".
 
 - Alternate App Store on ALTUI
 
-- Github
+- [Github repository](https://github.com/vosmont/Vera-Plugin-ZiGateGateway)
   
   Upload the files in "luup files" in the Vera (by the standard UI in "Apps-->Develop Apps-->Luup files").
   
   Create a new device in "Apps-->Develop Apps-->Create device", and set "Upnp Device Filename" to "D_ZiGateGateway1.xml".
 
-#### Set the serial connection on legacy Vera
+#### Set the serial connection
 
 Assign the serial port of the dongle to the plugin : go to "Apps/Develop Apps/Serial Port Configuration" and select from "Used by device" drop down list the "Edisio Gateway".
 Set the following parameters :
@@ -49,7 +50,20 @@ Parity    : none
 Stop bits : 1
 ```
 
-#### Set the serial connection on openLuup
+## Installation on openLuup
+
+#### Get the plugin
+- Alternate App Store on ALTUI
+
+- Github repository
+
+#### Install dependencies
+
+```
+sudo luarocks install luabitop
+```
+
+#### Set the serial connection
 
 1. Retrieve the usb device
 
@@ -79,7 +93,7 @@ Edit the file "ser2net.conf"
 ```
 sudo nano /etc/ser2net.conf
 ```
-Add this line (it depends on your device; see config on your Vera in Apps->Develop apps->Serial Port configuration)
+Add this line (it depends on your device)
 ```
 3481:raw:0:/dev/ttyUSB0:115200 8DATABITS NONE 1STOPBIT
 ```
@@ -96,11 +110,24 @@ Set the attribut "ip" to "127.0.0.1:3481", on the plugin instance.
 
 ## Add your ZigBee devices
 
-1. In the "Discovered devices" tab, click on the button "Inclusion"
+1. In the "Discovered devices" tab, click on the button "Inclusion" (this mode will be activated during 30 seconds).
 2. Associate your ZigBee devices with the ZiGate (usually by physically pressing a button on your device)
 3. The ZigBee devices should appear in the tab.
 <img src="media/zigate_gateway_screenshot_discovered_devices.png">
 4. Select the devices you want to create on your Vera, by selecting them and choosing the device type if needed.
+
+## ZigBee devices
+
+The ZigBee devices, known by the ZiGate and learned by the Vera, behave themselves as standard devices on the Vera.
+
+You will find all the learned ZigBee devices in the "Managed devices" tab.
+<img src="media/zigate_gateway_screenshot_managed_devices.png">
+
+## Device settings
+
+1. In the "Managed devices" tab, click on the button "Action" of the ZigBee device.
+<img src="media/zigate_gateway_screenshot_device_settings.png">
+2. You can change the behavior of your device (e.g., change the timeout of a motion sensor).
 
 ## Association
 
