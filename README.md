@@ -136,7 +136,7 @@ You can define a link between your ZigBee device and another device in your Vera
 From the tab "Devices" in the plugin, click on the action "Associate" of the device you wish to link.
 Then select the compatible devices and validate.
 
-Association means that changes on the edisio device will be passed on the associated device (e.g. if the ZigBee device is switched on, the associated device is switched on too).
+Association means that changes on the ZigBee device will be passed on the associated device (e.g. if the ZigBee device is switched on, the associated device is switched on too).
 
 
 ## Logs
