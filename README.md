@@ -40,7 +40,7 @@ Plug the ZiGate USB dongle into an Vera's USB port.
 
 #### Set the serial connection
 
-Assign the serial port of the dongle to the plugin : go to "Apps/Develop Apps/Serial Port Configuration" and select from "Used by device" drop down list the "Edisio Gateway".
+Assign the serial port of the dongle to the plugin : go to "Apps/Develop Apps/Serial Port Configuration" and select from "Used by device" drop down list the "ZiGate Gateway".
 Set the following parameters :
 
 ```
