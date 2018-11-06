@@ -18,7 +18,7 @@
 	<incoming>
 		<lua>
 			-- If the 'startup' function hasn't run yet,
-			-- 'plugin' and 'handleIncoming' are not defined.
+			-- 'plugin' and 'Network' are not defined.
 			if ( not plugin or not plugin.Network ) then
 				fc = fc + 1
 				luup.log( "(ZiGateGateway::incoming) fc=" .. tostring(  fc) )
@@ -52,41 +52,49 @@
 				return plugin.Child.setLoadLevelTarget( lul_device, lul_settings.newLoadlevelTarget )
 			</job>
 		</action>
+		<!-- Scene controller -->
+		<action>
+			<serviceId>urn:micasaverde-com:serviceId:SceneController1</serviceId>
+			<name>SetLoadLevelTarget</name>
+			<job>
+				return plugin.Child.setLoadLevelTarget( lul_device, lul_settings.newLoadlevelTarget )
+			</job>
+		</action>
 		<!-- ZiGate gateway -->
 		<action>
 			<serviceId>urn:upnp-org:serviceId:ZiGateGateway1</serviceId>
 			<name>SendMessage</name>
 			<job>
-				return plugin.sendMessage( lul_settings.type, lul_settings.data )
+				return plugin.Main.startJob( plugin.Main.sendMessage, lul_settings.type, lul_settings.data )
 			</job>
 		</action>
 		<action>
 			<serviceId>urn:upnp-org:serviceId:ZiGateGateway1</serviceId>
 			<name>Refresh</name>
 			<job>
-				return plugin.refresh()
+				return plugin.Main.startJob( plugin.Main.refresh )
 			</job>
 		</action>
 		<action>
 			<serviceId>urn:upnp-org:serviceId:ZiGateGateway1</serviceId>
 			<name>CreateDevices</name>
 			<job>
-				return plugin.createDevices( lul_settings.items )
+				return plugin.Main.startJob( plugin.Main.createDevices, lul_settings.mappings )
 			</job>
 		</action>
 		<action>
 			<serviceId>urn:upnp-org:serviceId:ZiGateGateway1</serviceId>
 			<name>Inclusion</name>
 			<run>
-				return plugin.startInclusion()
+				return plugin.Main.startJob( plugin.Main.startInclusion )
 			</run>
 		</action>
 		<action>
 			<serviceId>urn:upnp-org:serviceId:ZiGateGateway1</serviceId>
-			<name>Associate</name>
-			<run>
-				return plugin.associate( lul_settings.address, lul_settings.endPoint, lul_settings.feature, lul_settings.association )
-			</run>
+			<name>SetParam</name>
+			<job>
+				return plugin.Main.startJob( plugin.Main.setParam, lul_settings.paramName, lul_settings.paramValue )
+			</job>
 		</action>
 	</actionList>
 </implementation>

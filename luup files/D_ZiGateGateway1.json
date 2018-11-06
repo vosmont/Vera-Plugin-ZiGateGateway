@@ -82,30 +82,40 @@
 		},
 		{
 			"Label": {
-				"lang_tag": "zigate_tab_managed_devices",
-				"text": "Managed devices"
+				"lang_tag": "zigate_tab_settings",
+				"text": "Settings"
 			},
 			"Position": 1,
 			"TabType": "javascript",
 			"ScriptName": "J_ZiGateGateway1.js",
-			"Function": "ZiGateGateway.showDevices"
+			"Function": "ZiGateGateway.showSettings"
 		},
 		{
 			"Label": {
-				"lang_tag": "zigate_tab_discovered_devices",
-				"text": "Discovered devices"
+				"lang_tag": "zigate_tab_managed_equipments",
+				"text": "Managed equipments"
 			},
-			"Position": 2,
+			"Position": 3,
 			"TabType": "javascript",
 			"ScriptName": "J_ZiGateGateway1.js",
-			"Function": "ZiGateGateway.showDiscoveredDevices"
+			"Function": "ZiGateGateway.showEquipments"
+		},
+		{
+			"Label": {
+				"lang_tag": "zigate_tab_discovered_equipments",
+				"text": "Discovered equipments"
+			},
+			"Position": 4,
+			"TabType": "javascript",
+			"ScriptName": "J_ZiGateGateway1.js",
+			"Function": "ZiGateGateway.showDiscoveredEquipments"
 		},
 		{
 			"Label": {
 				"lang_tag": "zigate_tab_errors",
 				"text": "Errors"
 			},
-			"Position": 3,
+			"Position": 5,
 			"TabType": "javascript",
 			"ScriptName": "J_ZiGateGateway1.js",
 			"Function": "ZiGateGateway.showErrors"
@@ -115,7 +125,7 @@
 				"lang_tag": "zigate_tab_donate",
 				"text": "Donate"
 			},
-			"Position": 4,
+			"Position": 6,
 			"TabType": "javascript",
 			"ScriptName": "J_ZiGateGateway1.js",
 			"Function": "ZiGateGateway.showDonate"
@@ -125,7 +135,7 @@
 				"lang_tag": "ui7_advanced_settings",
 				"text": "Advanced"
 			},
-			"Position": 5,
+			"Position": 7,
 			"TabType": "javascript",
 			"ScriptName": "shared.js",
 			"Function": "advanced_device"
@@ -135,7 +145,7 @@
 				"lang_tag": "ui7_notifications",
 				"text": "Notifications"
 			},
-			"Position": 6,
+			"Position": 9,
 			"TabType": "javascript",
 			"ScriptName": "shared.js",
 			"Function": "device_notifications"
@@ -145,7 +155,7 @@
 				"lang_tag": "ui7_device_scenes",
 				"text": "Scenes"
 			},
-			"Position": 7,
+			"Position": 10,
 			"TabType": "javascript",
 			"ScriptName": "shared.js",
 			"Function": "device_scenes"

@@ -48,7 +48,22 @@
 			<name>CreateDevices</name>
 			<argumentList>
 				<argument>
-					<name>items</name>
+					<name>mappings</name>
+					<direction>in</direction>
+					<relatedStateVariable>A_ARG_TYPE_STRING</relatedStateVariable>
+				</argument>
+			</argumentList>
+		</action>
+		<action>
+			<name>SetParam</name>
+			<argumentList>
+				<argument>
+					<name>paramName</name>
+					<direction>in</direction>
+					<relatedStateVariable>A_ARG_TYPE_STRING</relatedStateVariable>
+				</argument>
+				<argument>
+					<name>paramValue</name>
 					<direction>in</direction>
 					<relatedStateVariable>A_ARG_TYPE_STRING</relatedStateVariable>
 				</argument>
@@ -57,31 +72,6 @@
 		<action>
 			<name>Inclusion</name>
 			<argumentList>
-			</argumentList>
-		</action>
-		<action>
-			<name>Associate</name>
-			<argumentList>
-				<argument>
-					<name>address</name>
-					<direction>in</direction>
-					<relatedStateVariable>A_ARG_TYPE_STRING</relatedStateVariable>
-				</argument>
-				<argument>
-					<name>endPoint</name>
-					<direction>in</direction>
-					<relatedStateVariable>A_ARG_TYPE_STRING</relatedStateVariable>
-				</argument>
-				<argument>
-					<name>feature</name>
-					<direction>in</direction>
-					<relatedStateVariable>A_ARG_TYPE_STRING</relatedStateVariable>
-				</argument>
-				<argument>
-					<name>association</name>
-					<direction>in</direction>
-					<relatedStateVariable>A_ARG_TYPE_STRING</relatedStateVariable>
-				</argument>
 			</argumentList>
 		</action>
 	</actionList>

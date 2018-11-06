@@ -3,7 +3,7 @@
 /**
  * This file is part of the plugin ZiGateGateway.
  * https://github.com/vosmont/Vera-Plugin-ZiGateGateway
- * Copyright (c) 2017 Vincent OSMONT
+ * Copyright (c) 2018 Vincent OSMONT
  * This code is released under the MIT License, see LICENSE.
  */
 
@@ -52,7 +52,7 @@
 					}
 				},
 				onFailure: function( response ) {
-					Utils.logDebug( "[Utils.performActionOnDevice] ERROR(" + response.status + "): " + response.responseText );
+					Utils.logError( "[Utils.performActionOnDevice] ERROR(" + response.status + "): " + response.responseText );
 					d.reject();
 				}
 			} );
@@ -69,7 +69,7 @@
 				d.resolve();
 			},
 			onFailure: function() {
-				Utils.logDebug( "[Utils.setDeviceStateVariablePersistent] ERROR" );
+				Utils.logError( "[Utils.setDeviceStateVariablePersistent] ERROR" );
 				d.reject();
 			}
 		});
@@ -84,11 +84,19 @@
 		return language.substring( 0, 2 );
 	};
 
-	Utils.initTokens = function( tokens ) {
+	Utils.initTokensWithPrefix = function( prefix, tokens ) {
+		$.each( tokens, function( key, value ) {
+			tokens[ prefix + "_" + key ] = value;
+			delete tokens[ key ];
+		});
 		if ( window.Localization ) {
 			window.Localization.init( tokens );
 		} else if ( window.langJson ) {
-			window.langJson.Tokens = $.extend( window.langJson.Tokens, tokens );
+			$.each( tokens, function( key, value ) {
+				if ( !window.langJson.Tokens[ key ] ) {
+					window.langJson.Tokens[ key ] = value;
+				}
+			});
 		}
 	};
 
@@ -135,6 +143,11 @@
 		// Execute loaders
 		$.when.apply( $, loaders )
 			.done( function( xml, textStatus, jqxhr ) {
+				if ( jqxhr && jqxhr.responseText === "" ) {
+					// The Vera returns an empty file even if it does not exist :(
+					d.reject();
+					return;
+				}
 				if (loaders.length === 1) {
 					_resourceLoaded[ jqxhr.name ] = true;
 				} else if (loaders.length > 1) {
@@ -153,16 +166,14 @@
 		return d.promise();
 	};
 
-	if ( !String.prototype.format ) {
-		String.prototype.format = function() {
-			var content = this;
-			for (var i=0; i < arguments.length; i++) {
-				var replacement = new RegExp('\\{' + i + '\\}', 'g');
-				content = content.replace(replacement, arguments[i]);  
-			}
-			return content;
-		};
-	}
+	Utils.getLangStringFormat = function() {
+		var content = Utils.getLangString( arguments[0] );
+		for ( var i=1; i < arguments.length; i++ ) {
+			var replacement = new RegExp( '\\{' + (i-1) + '\\}', 'g' );
+			content = content.replace( replacement, arguments[i] );
+		}
+		return content;
+	};
 
 } ) ( jQuery );
 
@@ -172,7 +183,10 @@
  */
 ( function( $ ) {
 	if ( window.Localization ) {
-		Utils.getLangString = function( token, defaultValue ) { return _T(token) || defaultValue; };
+		Utils.getLangString = function( token, defaultValue ) {
+			var result = _T(token);
+			return ( result === token ? defaultValue || token : result ); 
+		};
 	}
 } ) ( jQuery );
 
@@ -186,14 +200,19 @@ var ZiGateGateway = ( function( api, $ ) {
 	var _uuid = "c434706c-ddfd-404c-bd50-8bd35e05d6ab";
 	var PLUGIN_SID = "urn:upnp-org:serviceId:ZiGateGateway1";
 	var PLUGIN_CHILD_SID = "urn:upnp-org:serviceId:ZiGateDevice1";
+	var PLUGIN_REFRESH_TIMEOUT = 30;
+	var PLUGIN_REFRESH_INTERVAL = 5;
 	var _deviceId = null;
 	var _lastUpdate = 0;
-	var _indexFeatures = {}, _indexDevices = {};
-	var _selectedProductId = "";
-	var _selectedFeatureName = "";
+	var _indexMappings = {};
+	var _selectedDeviceId = "";
 	var _formerScrollTopPosition = 0;
-	var _devicesTimeout, _discoveredDevicesTimeout;
-	var _devicesLastRefresh = 0, _discoveredDevicesLastRefresh = 0;
+	var _equipmentsTimeout, _discoveredEquipmentsTimeout;
+	var _equipmentsLastRefresh = 0, _discoveredEquipmentsLastRefresh = 0;
+
+	// *************************************************************************************************
+	// Tools
+	// *************************************************************************************************
 
 	/**
 	 * Resources
@@ -226,30 +245,6 @@ var ZiGateGateway = ( function( api, $ ) {
 					d.reject();
 				}
 			});
-		return d.promise();
-	}
-
-	/**
-	 * Get informations on external devices
-	 */
-	function _getDevicesInfosAsync() {
-		var d = $.Deferred();
-		$.ajax( {
-			url: Utils.getDataRequestURL() + "id=lr_" + _pluginName + "&command=getDevicesInfos&output_format=json#",
-			dataType: "json"
-		} )
-		.done( function( devicesInfos ) {
-			if ( $.isPlainObject( devicesInfos ) ) {
-				d.resolve( devicesInfos );
-			} else {
-				Utils.logError( "No devices infos" );
-				d.reject();
-			}
-		} )
-		.fail( function( jqxhr, textStatus, errorThrown ) {
-			Utils.logError( "Get " + _pluginName + " devices infos error : " + errorThrown );
-			d.reject();
-		} );
 		return d.promise();
 	}
 
@@ -287,19 +282,16 @@ var ZiGateGateway = ( function( api, $ ) {
 	/**
 	 * Settings
 	 */
-
 	function _getSettingHtml( setting ) {
 		var className = _prefix + "-setting-value" + ( setting.className ? " " + setting.className : "" );
+		var settingName = setting.name || setting.variable;
 		var html = '<div class="' + _prefix + '-setting ui-widget-content ui-corner-all">'
-			+			'<span>' + setting.name + '</span>';
+			+			'<span>' + Utils.getLangString( _prefix + "_" + settingName, settingName ) + '</span>';
 		if ( setting.type == "checkbox" ) {
 			html += '<input type="checkbox"'
 				+		( ( setting.value === true ) ? ' checked="checked"' : '' )
 				+		( ( setting.isReadOnly === true ) ? ' disabled="disabled"' : '' )
 				+		' class="' + className + '" data-setting="' + setting.variable  + '">';
-		} else if ( setting.type == "string" ) {
-			var value = ( setting.value ? setting.value : ( setting.defaultValue ? setting.defaultValue : '' ) );
-			html +=	'<input type="text" value="' + value + '" class="' + className + '" data-setting="' + setting.variable  + '">';
 		} else if ( setting.type == "select" ) {
 			html +=	'<select class="' + className + '" data-setting="' + setting.variable + '">';
 			$.each( setting.values, function( i, value ) {
@@ -314,28 +306,155 @@ var ZiGateGateway = ( function( api, $ ) {
 				html +=	'<option value="' + value + '"' + ( isSelected ? ' selected' : '' ) + '>' + value + '</option>';
 			} );
 			html +=	'</select>';
+		} else {
+			var value = ( setting.value ? setting.value : ( setting.defaultValue ? setting.defaultValue : '' ) );
+			html +=	'<input type="text" value="' + value + '" class="' + className + '" data-setting="' + setting.variable  + '">';
+		}
+		if ( setting.action == "SetParam" ) {
+			html +=	'<button type="button" class="' + _prefix + '-set-param" data-name="' + setting.variable  + '">Set</button>'
+		}
+		if ( setting.comment ) {
+			html +=	'<span class="' + _prefix + '-setting-comment">' + setting.comment + '</span>';
 		}
 		html +=	'</div>';
 		return html;
 	}
 
 	// *************************************************************************************************
-	// External devices
+	// Plugin settings
 	// *************************************************************************************************
 
-	function _stopDevicesRefresh() {
-		if ( _devicesTimeout ) {
-			window.clearTimeout( _devicesTimeout );
-		}
-		_devicesTimeout = null;
+	/**
+	 * Get plugin settings
+	 */
+	function _getSettingsAsync() {
+		var d = $.Deferred();
+		api.showLoadingOverlay();
+		$.ajax( {
+			url: Utils.getDataRequestURL() + "id=lr_" + _pluginName + "&command=getSettings&output_format=json#",
+			dataType: "json"
+		} )
+		.done( function( settings ) {
+			api.hideLoadingOverlay();
+			if ( $.isPlainObject( settings ) ) {
+				d.resolve( settings );
+			} else {
+				Utils.logError( "No setting" );
+				d.reject();
+			}
+		} )
+		.fail( function( jqxhr, textStatus, errorThrown ) {
+			api.hideLoadingOverlay();
+			Utils.logError( "Get " + _pluginName + " settings infos error : " + errorThrown );
+			d.reject();
+		} );
+		return d.promise();
 	}
-	function _resumeDevicesRefresh() {
-		if ( _devicesTimeout == null ) {
-			var timeout = 3000 - ( Date.now() - _devicesLastRefresh );
+
+	/**
+	 * Show plugin settings
+	 */
+	function _showSettings( deviceId ) {
+		if ( deviceId ) {
+			_deviceId = deviceId;
+		}
+		try {
+			$.when( _getSettingsAsync(), _loadResourcesAsync(), _loadLocalizationAsync() )
+				.done( function( settings ) {
+					var html = '<div id="' + _prefix + '-plugin-settings" class="' + _prefix + '-panel">'
+						+		'<h1>' + Utils.getLangString( _prefix + "_plugin_settings" ) + '</h1>'
+						+		'<div class="scenes_section_delimiter"></div>'
+						+		'<div class="' + _prefix + '-toolbar">'
+						+			'<button type="button" class="' + _prefix + '-help"><i class="fa fa-question fa-lg text-info" aria-hidden="true"></i>&nbsp;' + Utils.getLangString( _prefix + "_help" ) + '</button>'
+						+		'</div>'
+						+		'<div class="' + _prefix + '-explanation ' + _prefix + '-hidden">'
+						+			Utils.getLangString( _prefix + "_explanation_plugin_settings" )
+						+		'</div>'
+						+		'<div>'
+						+			'<h3>Plugin</h3>';
+					$.each( settings.plugin, function( key, value ) {
+						html += _getSettingHtml({
+							type: "string",
+							variable: "plugin." + key,
+							name: key,
+							value: value,
+							comment: ""
+						});
+					});
+					html +=		'</div>'
+						+		'<div>'
+						+			'<h3>System</h3>';
+					$.each( settings.system, function( key, value ) {
+						html += _getSettingHtml({
+							type: "string",
+							variable: "system." + key,
+							name: key,
+							value: value
+						});
+					});
+					html +=		'</div>'
+						+	'</div>';
+					api.setCpanelContent( html );
+
+					// Manage UI events
+					$( "#" + _prefix + "-plugin-settings" )
+						.on( "click", "." + _prefix + "-help", function() {
+							$( this ).parent().next( "." + _prefix + "-explanation" ).toggleClass( _prefix + "-hidden" );
+						})
+						.on( "click", "." + _prefix + "-set-param", function() {
+							_performActionSetParam( $( this ).data( "name" ), $( this ).prev( "." + _prefix + "-setting-value" ).val() );
+						});
+				})
+				.fail( function() {
+					api.setCpanelContent( Utils.getLangString( _prefix + "_communication_error" ) );
+				});
+		} catch (err) {
+			Utils.logError( "Error in " + _pluginName + ".showSettings(): " + err );
+		}
+	}
+
+	// *************************************************************************************************
+	// Equipments
+	// *************************************************************************************************
+
+	/**
+	 * Get informations on equipments
+	 */
+	function _getEquipmentsInfosAsync() {
+		var d = $.Deferred();
+		$.ajax( {
+			url: Utils.getDataRequestURL() + "id=lr_" + _pluginName + "&command=getEquipmentsInfos&output_format=json#",
+			dataType: "json",
+			timeout: PLUGIN_REFRESH_TIMEOUT * 1000
+		} )
+		.done( function( infos ) {
+			if ( $.isPlainObject( infos ) ) {
+				d.resolve( infos );
+			} else {
+				Utils.logError( "No equipments infos" );
+				d.reject();
+			}
+		} )
+		.fail( function( jqxhr, textStatus, errorThrown ) {
+			Utils.logError( "Get " + _pluginName + " equipments infos error : " + errorThrown );
+			d.reject();
+		} );
+		return d.promise();
+	}
+
+	function _stopEquipmentsRefresh() {
+		if ( _equipmentsTimeout ) {
+			window.clearTimeout( _equipmentsTimeout );
+		}
+		_equipmentsTimeout = null;
+	}
+	function _resumeEquipmentsRefresh() {
+		if ( _equipmentsTimeout == null ) {
+			var timeout = PLUGIN_REFRESH_INTERVAL * 1000 - ( Date.now() - _equipmentsLastRefresh );
 			if ( timeout < 0 ) {
 				timeout = 0;
 			}
-			_devicesTimeout = window.setTimeout( _drawDevicesList, timeout );
+			_equipmentsTimeout = window.setTimeout( _drawEquipmentsList, timeout );
 		}
 	}
 
@@ -346,7 +465,7 @@ var ZiGateGateway = ( function( api, $ ) {
 				pressType = "long";
 			}
 			return	'<span class="' + _prefix + '-association ' + _prefix + '-association-' + associationType + '" title="' + associationType + ' associated with ' + pressType + ' press">'
-				+		'<span class="ziblue-' + pressType + '-press">'
+				+		'<span class="' + _prefix + '-' + pressType + '-press">'
 				+			association[ level ].join( "," )
 				+		'</span>'
 				+	'</span>';
@@ -355,140 +474,149 @@ var ZiGateGateway = ( function( api, $ ) {
 	}
 
 	/**
-	 * Draw and manage external device list
+	 * Draw and manage equipments list
 	 */
-	function _drawDevicesList() {
-		_stopDevicesRefresh();
-		if ( $( "#" + _prefix + "-known-devices" ).length === 0 ) {
+	function _drawEquipmentsList() {
+		_stopEquipmentsRefresh();
+		if ( $( "#" + _prefix + "-known-equipments" ).length === 0 ) {
+			// The panel is no more here
 			return;
 		}
-		_indexFeatures = {}; _indexDevices = {};
-		$.when( _getDevicesInfosAsync() )
-			.done( function( devicesInfos ) {
-				if ( devicesInfos.devices.length > 0 ) {
-					$.each( devicesInfos.devices, function( i, device ) {
-						var room = api.getRoomObject( device.mainRoomId );
-						device.roomName = room ? room.name : 'unknown';
+		if ( !$( "#" + _prefix + "-known-equipments" ).is( ":visible" ) ) {
+			// The panel is hidden
+			_equipmentsLastRefresh = Date.now();
+			_resumeEquipmentsRefresh();
+			return;
+		}
+		_indexMappings = {};
+		$.when( _getEquipmentsInfosAsync() )
+			.done( function( infos ) {
+				if ( infos.equipments.length > 0 ) {
+					$.each( infos.equipments, function( i, equipment ) {
+						var haRoom = api.getRoomObject( equipment.mainRoomId );
+						equipment.roomName = haRoom ? haRoom.name : 'unknown';
 					});
-					// Sort the devices by room / name
-					devicesInfos.devices.sort( function( a, b ) {
-						if ( a.protocol === b.protocol ) {
-							var x = a.roomName.toLowerCase(), y = b.roomName.toLowerCase();
+					// Sort the equipments by room / name
+					infos.equipments.sort( function( e1, e2 ) {
+						if ( e1.protocol === e2.protocol ) {
+							var x = e1.roomName.toLowerCase(), y = e2.roomName.toLowerCase(); // TODO ????
 							return x < y ? -1 : x > y ? 1 : 0;
 						}
-						return a.protocol < b.protocol ? -1 : a.protocol > b.protocol ? 1 : 0;
+						return e1.protocol < e2.protocol ? -1 : e1.protocol > e2.protocol ? 1 : 0;
 					});
 					
 					var html =	'<table><tr>'
 						+			'<th>' + Utils.getLangString( _prefix + "_room" ) + '</th>'
-						+			'<th>' + Utils.getLangString( _prefix + "_address" ) + '</th>'
-						+			'<th>' + Utils.getLangString( _prefix + "_endpoint" ) + '</th>'
+						+			'<th>' + Utils.getLangString( _prefix + "_protocol" ) + '</th>'
+						+			'<th>' + Utils.getLangString( _prefix + "_id" ) + '</th>'
 						+			'<th>' + Utils.getLangString( _prefix + "_signal_quality" ) + '</th>'
-						+			'<th>' + Utils.getLangString( _prefix + "_last_update" ) + '</th>'
 						+			'<th>' + Utils.getLangString( _prefix + "_feature" ) + '</th>'
-						+			'<th>' + Utils.getLangString( _prefix + "_device" ) + '</th>'
-						+			'<th>' + Utils.getLangString( _prefix + "_association" ) + '</th>'
-						+			'<th>' + Utils.getLangString( _prefix + "_action" ) + '</th>'
 						+		'</tr>';
-					$.each( devicesInfos.devices, function( i, device ) {
-						var rowSpan = ( device.features.length > 1 ? ' rowspan="' + device.features.length + '"' : '' );
-						html += '<tr>'
-							+		'<td class="' + _prefix + '-room-name"' + rowSpan + '>' + device.roomName + '</td>'
-							+		'<td class="' + _prefix + '-address"' + rowSpan + '>' + device.address + '</td>'
-							+		'<td' + rowSpan + '>' + device.endPoint + '</td>'
-							+		'<td' + rowSpan + '>' + ( device.quality >= 0 ? device.quality : '' ) + '</td>'
-							+		'<td' + rowSpan + '>' + _convertTimestampToLocaleString( device.lastUpdate ) + '</td>';
-						var isFirstRow = true;
-
-						device.features.sort( function( a, b ) {
-							if ( a.deviceName < b.deviceName ) {
+					$.each( infos.equipments, function( i, equipment ) {
+						html += '<tr class="' + _prefix + '-known-equipment">'
+							+		'<td>' + equipment.roomName + '</td>'
+							+		'<td>' + equipment.protocol + '</td>'
+							+		'<td>' + equipment.id + ( equipment.address ? ' (' + equipment.address + ')' : '' ) + ( equipment.isNew ? ' <span style="color:red">NEW</span>' : '' ) + '</td>'
+							+		'<td>' + ( equipment.quality >= 0 ? equipment.quality : '' ) + '</td>'
+							+		'<td>'
+/*
+						// Sort features of the equipment by linked device names
+						equipment.features.sort( function( e1, e2 ) {
+							var nameA = api.getDeviceObject( e1.deviceId ).name.toLowerCase();
+							var nameB = api.getDeviceObject( e2.deviceId ).name.toLowerCase();
+							if ( nameA < nameB ) {
 								return -1;
-							} else if ( a.deviceName > b.deviceName ) {
+							} else if ( nameA > nameB ) {
 								return 1;
 							}
 							return 0;
 						});
+*/
+						html +=			'<div class="' + _prefix + '-equipment-last-update">' + _convertTimestampToLocaleString( equipment.lastUpdate ) + '</div>'
+							+			'<div class="' + _prefix + '-equipment-mappings">';
+						$.each( equipment.mappings, function( i, mapping ) {
+							html +=			'<div class="' + _prefix + '-equipment-mapping">';
 
-						var countDevices = {};
-						$.each( device.features, function( i, feature ) {
-							countDevices[ feature.deviceId.toString() ] = countDevices[ feature.deviceId.toString() ]  != null ? countDevices[ feature.deviceId.toString() ] + 1 : 1;
+							html +=				'<div class="' + _prefix + '-features">';
+							$.each( mapping.features, function( featureName, feature ) {
+								html +=				'<div class="' + _prefix + '-feature">'
+									+					'<span class="' + _prefix + '-feature-name">' + featureName + '</span>'
+									+					( feature.data ? '<span class="' + _prefix + '-feature-data">' + feature.data + ( feature.unit ? ' ' + feature.unit : '' ) + '</span>' : '' )
+									+					( feature.comment ? '<div class="' + _prefix + '-feature-comment">' + feature.comment + '</div>' : '' )
+									+				'</div>';
+							});
+							html +=				'</div>';
+
+							var device = mapping.device;
+							_indexMappings[ device.id.toString() ] = [ equipment, mapping ];
+							var haDevice = api.getDeviceObject( device.id );
+							html +=				'<i class="' + _prefix + '-device-actions fa fa-caret-down fa-lg" aria-hidden="true" data-device-id="' + device.id + '"></i>'
+								+				'<div class="' + _prefix + '-device-type">'
+								+					'<div><span class="' + _prefix + '-device-name">' + haDevice.name + '</span> (#' + device.id + ')</div>'
+								+					'<div>'
+								+						Utils.getLangString( _prefix + "_" + haDevice.device_type )
+								+					'</div>'
+								+					'<div class="' + _prefix + '-device-settings">'
+								+						( device.settings.momentary ? ' MOMENTARY' : '' )
+								+						( device.settings.toggle ? ' TOGGLE' : '' )
+								+					'</div>'
+								+					'<div class="' + _prefix + '-device-association">'
+								+						_getAssociationHtml( "device", device.association.devices, 0 )
+								//+						_getAssociationHtml( "device", device.association.devices, 1 )
+								+						_getAssociationHtml( "scene", device.association.scenes, 0 )
+								//+						_getAssociationHtml( "scene", device.association.scenes, 1 )
+								+						_getAssociationHtml( "equipment", device.association.equipments, 0 )
+								+					'</div>'
+								+				'</div>';
+
+							if ( mapping.endpointId ) {
+								html +=			'<div class="' + _prefix + '-equipment-endpoint">' + mapping.endpointId + '</div>';
+							}
+
+							html +=			'</div>';
 						});
-
-						var lastDeviceId = -1;
-						var deviceRowSpan = '1';
-						$.each( device.features, function( i, feature ) {
-							var productId = device.address + ';' + device.endPoint;
-							_indexFeatures[ productId + ';' + feature.name ] = feature;
-							_indexDevices[ feature.deviceId.toString() ] = device.protocol;
-							if ( !feature.settings ) {
-								feature.settings = {};
-							}
-							/*feature.settings = {};
-							$.each( ( api.getDeviceStateVariable( feature.deviceId, PLUGIN_CHILD_SID, "Setting", { dynamic: false } ) || "" ).split( "," ), function( i, settingName ) {
-								feature.settings[ settingName ] = true;
-							} );*/
-							if ( !isFirstRow ) {
-								html += '<tr>';
-							}
-							html +=	'<td>'
-								+		'<div class="' + _prefix + '-feature-name">' + feature.name + '</div>'
-								+		( feature.data ? '<div class="' + _prefix + '-feature-data">' + feature.data + '</div>' : '' )
-								+	'</td>';
-
-							if ( feature.deviceId != lastDeviceId ) {
-								lastDeviceId = feature.deviceId;
-								deviceRowSpan = ' rowspan="' + countDevices[ feature.deviceId.toString() ] + '"';
-								html +=	'<td' + deviceRowSpan +'>'
-									//+			'<div class="' + _prefix + '-device-type">'
-									+		'<div><span class="' + _prefix + '-device-name">' + feature.deviceName + '</span> (#' + feature.deviceId + ')</div>'
-									+		'<div>'
-									+				Utils.getLangString( feature.deviceTypeName )
-									+				( device.isNew ? ' <span style="color:red">NEW</span>' : '' )
-									+				( feature.settings.pulse ? ' PULSE' : '' )
-									+				( feature.settings.toggle ? ' TOGGLE' : '' )
-									+		'</div>'
-									//+		'</div>'
-									+	'</td>'
-									+	'<td' + deviceRowSpan +'>'
-									+		_getAssociationHtml( "device", feature.association.devices, 0 )
-									//+		_getAssociationHtml( "device", feature.association.devices, 1 )
-									+		_getAssociationHtml( "scene", feature.association.scenes, 0 )
-									//+		_getAssociationHtml( "scene", feature.association.scenes, 1 )
-									+		_getAssociationHtml( "ziblue-device", feature.association.ziGateDevices, 0 )
-									+	'</td' + deviceRowSpan +'>'
-									+	'<td' + deviceRowSpan +' align="center">'
-									//+		( !device.isNew && ( feature.settings.button || feature.settings.receiver ) ?
-									+		( !device.isNew ?
-												'<i class="' + _prefix + '-actions fa fa-caret-down fa-lg" aria-hidden="true" data-product-id="' + productId + '" data-feature-name="' + feature.name + '"></i>'
-												: '' )
-									+	'</td>';
-							}
-							html +=	'</tr>';
-							isFirstRow = false;
-						} );
+						html +=			'</div>'
+							+		'</td>'
+							+	'</tr>';
 					});
 					html += '</table>';
-					$("#" + _prefix + "-known-devices").html( html );
+					$("#" + _prefix + "-known-equipments").html( html );
 				} else {
-					$("#" + _prefix + "-known-devices").html( Utils.getLangString( _prefix + "_no_device" ) );
+					$("#" + _prefix + "-known-equipments").html( Utils.getLangString( _prefix + "_no_equipment" ) );
 				}
-				_devicesLastRefresh = Date.now();
-				_resumeDevicesRefresh();
-			} );
+				_equipmentsLastRefresh = Date.now();
+				_resumeEquipmentsRefresh();
+			})
+			.fail( function() {
+				$("#" + _prefix + "-known-equipments").html( Utils.getLangString( _prefix + "_communication_error" ) );
+				_equipmentsLastRefresh = Date.now();
+				_resumeEquipmentsRefresh();
+			});
 	}
 
 	/**
-	 * Show the actions that can be done on an external device
+	 * Show the actions that can be done on an equipment
 	 */
-	function _showDeviceActions( position, settings ) {
-		_stopDevicesRefresh();
+	function _showEquipmentActions( position, equipment, mapping ) {
+		_stopEquipmentsRefresh();
+		var settings = mapping.device.settings;
+		var luDevice = api.getDeviceObject( mapping.device.id );
+		// Check if device is compatible with association
+		var isCompatible = false;
+		for ( var j = 0; j < luDevice.states.length; j++ ) {
+			if ( ( luDevice.states[j].service === SWP_SID ) || ( luDevice.states[j].service === SWD_SID ) || ( luDevice.states[j].service === SES_SID ) ) {
+				isCompatible = true;
+				break;
+			}
+		}
+
 		var html = '<table>'
 				+		'<tr>'
 				+			'<td>'
-				+				( settings.button ?
-								'<button type="button" class="' + _prefix + '-show-association">Associate</button>'
+				+				( settings.transmitter && isCompatible ?
+								'<button type="button" class="' + _prefix + '-show-association">' + Utils.getLangString( _prefix + "_associate" ) + '</button>'
 								: '')
-				+				'<button type="button" class="' + _prefix + '-show-params">Params</button>'
+				+				'<button type="button" class="' + _prefix + '-show-params">' + Utils.getLangString( _prefix + "_params" ) + '</button>'
 				+			'</td>';
 		/*
 		if ( settings.receiver ) {
@@ -500,23 +628,24 @@ var ZiGateGateway = ( function( api, $ ) {
 		*/
 		html +=			'</tr>'
 			+		'</table>';
-		var $actions = $( "#" + _prefix + "-device-actions" );
+		var $actions = $( "#" + _prefix + "-equipments-actions" );
 		$actions
 			.html( html )
-			.css( {
-				"display": "block",
-				"left": ( position.left - $actions.width() + 5 ),
-				"top": ( position.top - $actions.height() / 2 )
-			} );
+			.data( "equipment", equipment )
+			.data( "mapping", mapping )
+			.css({ "display": "block" });
+		position.left -= $actions.outerWidth() + 5;
+		position.top -= $actions.outerHeight() / 2;
+		$actions.offset( position );
 	}
 
 	/**
 	 * Show all devices and scene that can be associated and manage associations
 	 */
-	function _showDeviceAssociation( productId, feature ) {
-		_stopDevicesRefresh();
+	function _showEquipmentAssociation( equipment, mapping ) {
+		_stopEquipmentsRefresh();
 		var html = '<h1>' + Utils.getLangString( _prefix + "_association" ) + '</h1>'
-				+	'<h3>' + productId + ' - ' + feature.name + ' - ' + feature.deviceName + ' (#' + feature.deviceId + ')</h3>'
+				+	'<h3>' + equipment.protocol + ' - ' + equipment.id + " - " + Object.keys( mapping.features ).join( "," ) + ' (#' + mapping.device.id + ')</h3>'
 				+	'<div class="scenes_section_delimiter"></div>'
 				+	'<div class="' + _prefix + '-toolbar">'
 				+		'<button type="button" class="' + _prefix + '-help"><i class="fa fa-question fa-lg text-info" aria-hidden="true"></i>&nbsp;' + Utils.getLangString( _prefix + "_help" ) + '</button>'
@@ -525,49 +654,49 @@ var ZiGateGateway = ( function( api, $ ) {
 				+		Utils.getLangString( _prefix + "_explanation_association" )
 				+	'</div>';
 
-		// Get compatible devices
-		var protocol = _indexDevices[ feature.deviceId.toString() ];
+		// Get compatible devices in the HA controller
 		var devices = [];
-		$.each( api.getListOfDevices(), function( i, device ) {
-			if ( device.id == feature.deviceId ) {
+		$.each( api.getListOfDevices(), function( i, luDevice ) {
+			if ( luDevice.id == mapping.device.id ) {
 				return;
 			}
-			// Check if device is an external device
-			var isExternal = false;
-			if ( device.id_parent === _deviceId ) {
-				if ( _indexDevices[ device.id.toString() ] == protocol ) {
-					isExternal = true;
+			// Check if device is an equipment with same protocol
+			var isEquipment = false;
+			if ( luDevice.id_parent === _deviceId ) {
+				var index = _indexMappings[ luDevice.id.toString() ];
+				if ( index && ( index[0].protocol == equipment.protocol ) ) {
+					isEquipment = true;
 				}
 			}
 			// Check if device is compatible
 			var isCompatible = false;
-			for ( var j = 0; j < device.states.length; j++ ) {
-				if ( ( device.states[j].service === SWP_SID ) || ( device.states[j].service === SWD_SID ) ) {
+			for ( var j = 0; j < luDevice.states.length; j++ ) {
+				if ( ( luDevice.states[j].service === SWP_SID ) || ( luDevice.states[j].service === SWD_SID ) ) {
 					// Device can be switched or dimmed
 					isCompatible = true;
 					break;
 				}
 			}
-			if ( !isExternal && !isCompatible ) {
+			if ( !isEquipment && !isCompatible ) {
 				return;
 			}
 			
-			var room = ( device.room ? api.getRoomObject( device.room ) : null );
-			if ( isExternal ) {
+			var room = ( luDevice.room ? api.getRoomObject( luDevice.room ) : null );
+			if ( isEquipment ) {
 				devices.push( {
-					"id": device.id,
+					"id": luDevice.id,
 					"roomName": ( room ? room.name : "_No room" ),
-					"name": "(ZiGate) " + device.name,
+					"name": "(" + _prefix + ") " + luDevice.name,
 					"type": 3,
-					"isExternal": isExternal
+					"isEquipment": isEquipment
 				} );
 			} else {
 				devices.push( {
-					"id": device.id,
+					"id": luDevice.id,
 					"roomName": ( room ? room.name : "_No room" ),
-					"name": device.name,
+					"name": luDevice.name,
 					"type": 2,
-					"isExternal": isExternal
+					"isEquipment": isEquipment
 				} );
 			}
 		} );
@@ -600,7 +729,7 @@ var ZiGateGateway = ( function( api, $ ) {
 			if ( level === 1 ) {
 				pressType = "long";
 			}
-			return	'<span class="ziblue-' + pressType + '-press" title="' + pressType + ' press">'
+			return	'<span class="' + _prefix + '-' + pressType + '-press" title="' + pressType + ' press">'
 				+		'<input type="checkbox"' + ( association && ( $.inArray( parseInt( deviceId, 10 ), association[level] ) > -1 ) ? ' checked="checked"' : '' ) + '>'
 				+	'</span>';
 		}
@@ -615,8 +744,16 @@ var ZiGateGateway = ( function( api, $ ) {
 				// Scene
 				html += '<div class="' + _prefix + '-association ' + _prefix + '-association-scene" data-scene-id="' + device.id + '">'
 					+		'<label>'
-					+			_getCheckboxHtml( device.id, feature.association.scenes, 0 )
-					//+			_getCheckboxHtml( device.id, feature.association.scenes, 1 )
+					+			_getCheckboxHtml( device.id, mapping.device.association.scenes, 0 )
+					//+			_getCheckboxHtml( device.id, mapping.device.association.scenes, 1 )
+					+			'&nbsp;' + device.name + ' (#' + device.id + ')'
+					+		'</label>'
+					+	'</div>';
+			} else if ( device.type === 3 ) {
+				// Declared association between equipments
+				html += '<div class="' + _prefix + '-association ' + _prefix + '-association-equipment" data-device-id="' + device.id + '">'
+					+		'<label>'
+					+			_getCheckboxHtml( device.id, mapping.device.association.equipments, 0 )
 					+			'&nbsp;' + device.name + ' (#' + device.id + ')'
 					+		'</label>'
 					+	'</div>';
@@ -624,8 +761,8 @@ var ZiGateGateway = ( function( api, $ ) {
 				// Classic device (e.g. Z-wave)
 				html += '<div class="' + _prefix + '-association ' + _prefix + '-association-device" data-device-id="' + device.id + '">'
 					+		'<label>'
-					+			_getCheckboxHtml( device.id, feature.association.devices, 0 )
-					//+			_getCheckboxHtml( device.id, feature.association.devices, 1 )
+					+			_getCheckboxHtml( device.id, mapping.device.association.devices, 0 )
+					//+			_getCheckboxHtml( device.id, mapping.device.association.devices, 1 )
 					+			'&nbsp;' + device.name + ' (#' + device.id + ')'
 					+		'</label>'
 					+	'</div>';
@@ -637,7 +774,7 @@ var ZiGateGateway = ( function( api, $ ) {
 			+		'<button type="button" class="' + _prefix + '-associate"><i class="fa fa-check fa-lg text-success" aria-hidden="true"></i>&nbsp;'  + Utils.getLangString( _prefix + "_confirm" ) + '</button>'
 			+	'</div>';
 
-		$( "#" + _prefix + "-device-association" )
+		$( "#" + _prefix + "-equipments-association" )
 			.html( html )
 			.css( {
 				"display": "block"
@@ -646,8 +783,8 @@ var ZiGateGateway = ( function( api, $ ) {
 		_formerScrollTopPosition = $( window ).scrollTop();
 		$( window ).scrollTop( $( "#" + _prefix + "-known-panel" ).offset().top - 150 );
 	}
-	function _hideDeviceAssociation() {
-		$( "#" + _prefix + "-device-association" )
+	function _hideEquipmentAssociation() {
+		$( "#" + _prefix + "-equipments-association" )
 			.css( {
 				"display": "none",
 				"min-height": $( "#" + _prefix + "-known-panel" ).height()
@@ -656,47 +793,54 @@ var ZiGateGateway = ( function( api, $ ) {
 			$( window ).scrollTop( _formerScrollTopPosition );
 		}
 	}
-	function _setDeviceAssociation() {
+	function _setEquipmentAssociation() {
 		function _getEncodedAssociation() {
 			var associations = [];
-			$("#" + _prefix + "-device-association ." + _prefix + "-association-device input:checked").each( function() {
+			// Classic device
+			$("#" + _prefix + "-equipments-association ." + _prefix + "-association-device input:checked").each( function() {
 				var deviceId = $( this ).parents( "." + _prefix + "-association-device" ).data( "device-id" );
-				if ( $( this ).parent().hasClass( "ziblue-long-press" ) ) {
+				if ( $( this ).parent().hasClass( _prefix + "-long-press" ) ) {
 					associations.push( "+" + deviceId );
 				} else {
 					associations.push( deviceId );
 				}
 			});
-			$("#" + _prefix + "-device-association ." + _prefix + "-association-scene input:checked").each( function() {
+			// Scene
+			$("#" + _prefix + "-equipments-association ." + _prefix + "-association-scene input:checked").each( function() {
 				var sceneId = $( this ).parents( "." + _prefix + "-association-scene" ).data( "scene-id" );
-				if ( $( this ).parent().hasClass( "ziblue-long-press" ) ) {
+				if ( $( this ).parent().hasClass( _prefix + "-long-press" ) ) {
 					associations.push( "+*" + sceneId );
 				} else {
 					associations.push( "*" + sceneId );
 				}
 			});
-			$("#" + _prefix + "-device-association ." + _prefix + "-association-zibluedevice input:checked").each( function() {
-				var deviceId = $( this ).parents( "." + _prefix + "-association-zibluedevice" ).data( "device-id" );
+			// Device linked to an equipment
+			$("#" + _prefix + "-equipments-association ." + _prefix + "-association-equipment input:checked").each( function() {
+				var deviceId = $( this ).parents( "." + _prefix + "-association-equipment" ).data( "device-id" );
 				associations.push( "%" + deviceId );
 			});
 			return associations.join( "," );
 		}
 
-		var params = _selectedProductId.split( ";" );
-		$.when( _performActionAssociate( params[0], params[1], _selectedFeatureName, _getEncodedAssociation() ) )
+		var mapping = $( "#" + _prefix + "-equipments-actions" ).data( "mapping" );
+		$.when(
+			Utils.setDeviceStateVariablePersistent( mapping.device.id, PLUGIN_CHILD_SID, "Association", _getEncodedAssociation() ),
+			_performActionRefresh()
+		)
 			.done( function() {
-				_resumeDevicesRefresh();
-				_hideDeviceAssociation();
+				_resumeEquipmentsRefresh();
+				_hideEquipmentAssociation();
 			});
 	}
 
 	/**
-	 * Show parameters for an external device
+	 * Show parameters for an equipment
 	 */
-	function _showDeviceParams( productId, feature ) {
-		_stopDevicesRefresh();
+	function _showEquipmentParams( equipment, mapping ) {
+		_stopEquipmentsRefresh();
+		var settings = mapping.device.settings;
 		var html = '<h1>' + Utils.getLangString( _prefix + "_param" ) + '</h1>'
-				+	'<h3>' + productId + ' - ' + feature.deviceName + ' (#' + feature.deviceId + ')</h3>'
+				+	'<h3>' + equipment.protocol + ' - ' + equipment.id + " - " + Object.keys( mapping.features ).join( "," ) + ' (#' + mapping.device.id + ')</h3>'
 				+	'<div class="scenes_section_delimiter"></div>'
 				+	'<div class="' + _prefix + '-toolbar">'
 				+		'<button type="button" class="' + _prefix + '-help"><i class="fa fa-question fa-lg text-info" aria-hidden="true"></i>&nbsp;' + Utils.getLangString( _prefix + "_help" ) + '</button>'
@@ -705,23 +849,26 @@ var ZiGateGateway = ( function( api, $ ) {
 				+		Utils.getLangString( _prefix + "_explanation_param" )
 				+	'</div>';
 
-		// Button
+		// Transmitter
 		html += '<h3>'
 			+		_getSettingHtml({
 						type: "checkbox",
 						className: _prefix + "-hider",
-						variable: "button",
-						name: "Button",
-						value: feature.settings.button
+						variable: "transmitter",
+						value: settings.transmitter
 					})
 			+	'</h3>'
-			+	'<div class="' + _prefix + '-hideable"' + ( !feature.settings.button ? ' style="display: none;"' : '' ) + '>';
-		$.each( [ [ 'pulse', 'Pulse' ], [ 'toggle', 'Toggle' ] ], function( i, param ) {
+			+	'<div class="' + _prefix + '-hideable"' + ( !settings.transmitter ? ' style="display: none;"' : '' ) + '>';
+		$.each( [
+			[ "toggle", "checkbox" ],
+			[ "momentary", "checkbox" ],
+			[ "timeout", "string" ],
+			[ "timeForLongPress", "string" ]
+		], function( i, setting ) {
 			html += _getSettingHtml({
-				type: "checkbox",
-				variable: param[0],
-				name: param[1],
-				value: feature.settings[ param[0] ]
+				type: setting[1],
+				variable: setting[0],
+				value: settings[setting[0]]
 			});
 		});
 		html += '</div>';
@@ -732,22 +879,20 @@ var ZiGateGateway = ( function( api, $ ) {
 						type: "checkbox",
 						className: _prefix + "-hider",
 						variable: "receiver",
-						name: "Receiver",
-						value: feature.settings.receiver
+						value: settings.receiver
 					})
 			+	'</h3>'
-			+	'<div class="' + _prefix + '-hideable"' + ( !feature.settings.receiver ? ' style="display: none;"' : '' ) + '>';
+			+	'<div class="' + _prefix + '-hideable"' + ( !settings.receiver ? ' style="display: none;"' : '' ) + '>';
 		html += '</div>';
 
 		// Specific
 		var specificHtml = '';
-		$.each( feature.settings, function( paramName, paramValue ) {
-			if ( $.inArray( paramName, [ 'button', 'pulse', 'toggle', 'receiver', 'qualifier', 'burst' ] ) === -1 ) {
+		$.each( settings, function( paramName, paramValue ) {
+			if ( $.inArray( paramName, [ 'transmitter', 'toggle', 'momentary', "timeForLongPress", 'timeout', 'receiver', 'qualifier', 'burst' ] ) === -1 ) {
 				specificHtml += _getSettingHtml({
 					type: ( ( typeof paramValue == "boolean" ) ? "checkbox" : "string" ),
 					isReadOnly: true,
 					variable: paramName,
-					name: paramName,
 					value: paramValue
 				});
 			}
@@ -766,9 +911,9 @@ var ZiGateGateway = ( function( api, $ ) {
 			+		'<button type="button" class="' + _prefix + '-set"><i class="fa fa-check fa-lg text-success" aria-hidden="true"></i>&nbsp;'  + Utils.getLangString( _prefix + "_confirm" ) + '</button>'
 			+	'</div>';
 
-		$( "#" + _prefix + "-device-params" )
+		$( "#" + _prefix + "-equipments-params" )
 			.html( html )
-			.data( 'feature', feature )
+			.data( 'device', mapping.device )
 			.css( {
 				"display": "block",
 				"min-height": $( "#" + _prefix + "-known-panel" ).height()
@@ -783,8 +928,8 @@ var ZiGateGateway = ( function( api, $ ) {
 		_formerScrollTopPosition = $( window ).scrollTop();
 		$( window ).scrollTop( $( "#" + _prefix + "-known-panel" ).offset().top - 150 );
 	}
-	function _hideDeviceParams() {
-		$( "#" + _prefix + "-device-params" )
+	function _hideEquipmentParams() {
+		$( "#" + _prefix + "-equipments-params" )
 			.css( {
 				"display": "none"
 			} );
@@ -792,17 +937,17 @@ var ZiGateGateway = ( function( api, $ ) {
 			$( window ).scrollTop( _formerScrollTopPosition );
 		}
 	}
-	function _setDeviceParams() {
-		var feature = $( "#" + _prefix + "-device-params" ).data( "feature" );
-		feature.settings = {};
-		$( "#" + _prefix + "-device-params ." + _prefix + "-setting-value:visible" ).each( function() {
+	function _setEquipmentParams() {
+		var device = $( "#" + _prefix + "-equipments-params" ).data( "device" );
+		device.settings = {};
+		$( "#" + _prefix + "-equipments-params ." + _prefix + "-setting-value:visible" ).each( function() {
 			var settingName = $( this ).data( "setting" );
 			var settingValue = $( this ).is( ":checkbox" ) ? $( this ).is( ":checked" ) : $( this ).val();
 			if ( settingName && ( settingValue !== "" ) ) {
-				feature.settings[ settingName ] = settingValue;
+				device.settings[ settingName ] = settingValue;
 			}
 		});
-		var setting = $.map( feature.settings, function( value, key ) {
+		var setting = $.map( device.settings, function( value, key ) {
 			if ( typeof value == "boolean" ) {
 				return ( value === true ) ? key : null;
 			} else {
@@ -810,19 +955,19 @@ var ZiGateGateway = ( function( api, $ ) {
 			}
 		});
 		$.when(
-			Utils.setDeviceStateVariablePersistent( feature.deviceId, PLUGIN_CHILD_SID, "Setting", setting.join( "," ) ),
+			Utils.setDeviceStateVariablePersistent( device.id, PLUGIN_CHILD_SID, "Setting", setting.join( "," ) ),
 			_performActionRefresh()
 		)
 			.done( function() {
-				_resumeDevicesRefresh();
-				_hideDeviceParams();
+				_resumeEquipmentsRefresh();
+				_hideEquipmentParams();
 			});
 	}
 
 	/**
-	 * Show external devices
+	 * Show equipments
 	 */
-	function _showDevices( deviceId ) {
+	function _showEquipments( deviceId ) {
 		if ( deviceId ) {
 			_deviceId = deviceId;
 		}
@@ -830,21 +975,21 @@ var ZiGateGateway = ( function( api, $ ) {
 			$.when( _loadResourcesAsync(), _loadLocalizationAsync() ).then( function() {
 				api.setCpanelContent(
 						'<div id="' + _prefix + '-known-panel" class="' + _prefix + '-panel">'
-					+		'<h1>' + Utils.getLangString( _prefix + "_managed_devices" ) + '</h1>'
+					+		'<h1>' + Utils.getLangString( _prefix + "_managed_equipments" ) + '</h1>'
 					+		'<div class="scenes_section_delimiter"></div>'
 					+		'<div class="' + _prefix + '-toolbar">'
 					+			'<button type="button" class="' + _prefix + '-help"><i class="fa fa-question fa-lg text-info" aria-hidden="true"></i>&nbsp;' + Utils.getLangString( _prefix + "_help" ) + '</button>'
 					+			'<button type="button" class="' + _prefix + '-refresh"><i class="fa fa-refresh fa-lg" aria-hidden="true"></i>&nbsp;' + Utils.getLangString( _prefix + "_refresh" ) + '</button>'
 					+		'</div>'
 					+		'<div class="' + _prefix + '-explanation ' + _prefix + '-hidden">'
-					+			Utils.getLangString( _prefix + "_explanation_known_devices" )
+					+			Utils.getLangString( _prefix + "_explanation_known_equipments" )
 					+		'</div>'
-					+		'<div id="' + _prefix + '-known-devices" class="' + _prefix + '-devices">'
+					+		'<div id="' + _prefix + '-known-equipments" class="' + _prefix + '-equipments">'
 					+			Utils.getLangString( _prefix + "_loading" )
 					+		'</div>'
-					+		'<div id="' + _prefix + '-device-actions" style="display: none;"></div>'
-					+		'<div id="' + _prefix + '-device-association" style="display: none;"></div>'
-					+		'<div id="' + _prefix + '-device-params" style="display: none;"></div>'
+					+		'<div id="' + _prefix + '-equipments-actions" style="display: none;"></div>'
+					+		'<div id="' + _prefix + '-equipments-association" style="display: none;"></div>'
+					+		'<div id="' + _prefix + '-equipments-params" style="display: none;"></div>'
 					+	'</div>'
 				);
 
@@ -856,141 +1001,209 @@ var ZiGateGateway = ( function( api, $ ) {
 					.on( "click", "." + _prefix + "-refresh", function() {
 						$.when( _performActionRefresh() )
 							.done( function() {
-								_drawDevicesList();
+								_drawEquipmentsList();
 							});
 					} )
 					.click( function() {
-						$( "#" + _prefix + "-device-actions" ).css( "display", "none" );
+						$( "#" + _prefix + "-equipments-actions" ).css( "display", "none" );
 					} )
-					.on( "click", "." + _prefix + "-actions", function( e ) {
-						var position = $( this ).position();
-						position.left = position.left + $( this ).outerWidth();
-						_selectedProductId = $( this ).data( "product-id" );
-						_selectedFeatureName = $( this ).data( "feature-name" );
-						var selectedFeature = _indexFeatures[ _selectedProductId + ";" + _selectedFeatureName ];
-						if ( selectedFeature ) {
-							_showDeviceActions( position, selectedFeature.settings );
+					.on( "click", "." + _prefix + "-device-actions", function( e ) {
+						var position = $( this ).offset();
+						position.left += $( this ).outerWidth() / 2;
+						position.top += $( this ).outerHeight() / 2;
+						_selectedDeviceId = $( this ).data( "device-id" );
+						var index = _indexMappings[ _selectedDeviceId ];
+						if ( index ) {
+							var equipment = index[0];
+							var mapping   = index[1];
+							_showEquipmentActions( position, equipment, mapping );
 						}
 						e.stopPropagation();
 					} )
 					.on( "click", "." + _prefix + "-show-association", function() {
-						_showDeviceAssociation( _selectedProductId, _indexFeatures[ _selectedProductId + ";" + _selectedFeatureName ] );
+						var $actions = $( this ).parents( "#" + _prefix + "-equipments-actions" );
+						_showEquipmentAssociation( $actions.data( "equipment" ), $actions.data( "mapping" ) );
 					} )
 					.on( "click", "." + _prefix + "-show-params", function() {
-						_showDeviceParams( _selectedProductId, _indexFeatures[ _selectedProductId + ";" + _selectedFeatureName ] );
+						var $actions = $( this ).parents( "#" + _prefix + "-equipments-actions" );
+						_showEquipmentParams( $actions.data( "equipment" ), $actions.data( "mapping" ) );
 					} )
 					.on( "click", "." + _prefix + "-cancel", function() {
-						_hideDeviceAssociation();
-						_hideDeviceParams();
-						_resumeDevicesRefresh();
+						_hideEquipmentAssociation();
+						_hideEquipmentParams();
+						_resumeEquipmentsRefresh();
 					} )
 					// Association event
-					.on( "click", "." + _prefix + "-associate", _setDeviceAssociation )
+					.on( "click", "." + _prefix + "-associate", _setEquipmentAssociation )
 					// Parameters event
-					.on( "click", "." + _prefix + "-set", _setDeviceParams );
+					.on( "click", "." + _prefix + "-set", _setEquipmentParams )
+					// Teach (receiver) event
+					.on( "click", "." + _prefix + "-teach", function() {
+						var $actions = $( this ).parents( "#" + _prefix + "-equipments-actions" );
+						var equipment = $actions.data( "equipment" );
+						api.ui.showMessagePopup( Utils.getLangString( _prefix + "_confirmation_teach_in_receiver" ), 4, 0, {
+							onSuccess: function() {
+								// TODO : settings
+								_performActionTeachIn( equipment.protocol, equipment.id, {}, "ON", "" );
+								return true;
+							}
+						});
+					} )
+					// Clean (receiver) event
+					.on( "click", "." + _prefix + "-clear", function() {
+						var $actions = $( this ).parents( "#" + _prefix + "-equipments-actions" );
+						var equipment = $actions.data( "equipment" );
+						api.ui.showMessagePopup( Utils.getLangString( _prefix + "_confirmation_cleaning_receiver" ), 4, 0, {
+							onSuccess: function() {
+								_performActionClear( equipment.protocol + ";" + equipment.id );
+								return true;
+							}
+						});
+					} );
 
-				// Show devices infos
-				_drawDevicesList();
+				// Show equipments infos
+				_drawEquipmentsList();
 			});
 		} catch (err) {
-			Utils.logError( "Error in " + _pluginName + ".showDevices(): " + err );
+			Utils.logError( "Error in " + _pluginName + ".showEquipments(): " + err );
 		}
 	}
 
 	// *************************************************************************************************
-	// Discovered external devices
+	// Discovered equipments
 	// *************************************************************************************************
 
-	function _stopDiscoveredDevicesRefresh() {
-		if ( _discoveredDevicesTimeout ) {
-			window.clearTimeout( _discoveredDevicesTimeout );
+	function _stopDiscoveredEquipmentsRefresh() {
+		if ( _discoveredEquipmentsTimeout ) {
+			window.clearTimeout( _discoveredEquipmentsTimeout );
 		}
-		_discoveredDevicesTimeout = null;
+		_discoveredEquipmentsTimeout = null;
 	}
-	function _resumeDiscoveredDevicesRefresh() {
-		if ( _discoveredDevicesTimeout == null ) {
-			var timeout = 3000 - ( Date.now() - _discoveredDevicesLastRefresh );
+	function _resumeDiscoveredEquipmentsRefresh() {
+		if ( _discoveredEquipmentsTimeout == null ) {
+			var timeout = PLUGIN_REFRESH_INTERVAL * 1000 - ( Date.now() - _discoveredEquipmentsLastRefresh );
 			if ( timeout < 0 ) {
 				timeout = 0;
 			}
-			_discoveredDevicesTimeout = window.setTimeout( _drawDiscoveredDevicesList, timeout );
+			_discoveredEquipmentsTimeout = window.setTimeout( _drawDiscoveredEquipmentsList, timeout );
 		}
 	}
 
 	/**
-	 * Draw and manage discovered ziblue device list
+	 * Draw and manage discovered equipments list
 	 */
-	function _drawDiscoveredDevicesList() {
-		_stopDiscoveredDevicesRefresh();
-		if ( $( "#" + _prefix + "-discovered-devices" ).length === 0 ) {
+	function _drawDiscoveredEquipmentsList() {
+		_stopDiscoveredEquipmentsRefresh();
+		if ( $( "#" + _prefix + "-discovered-equipments" ).length === 0 ) {
+			// The panel is no more here
 			return;
 		}
-		$.when( _getDevicesInfosAsync() )
-			.done( function( devicesInfos ) {
-				if ( devicesInfos.discoveredDevices.length > 0 ) {
-					// Sort the discovered ziblue devices by last update
-					devicesInfos.discoveredDevices.sort( function( d1, d2 ) {
-						return d2.lastUpdate - d1.lastUpdate;
+		if ( !$( "#" + _prefix + "-discovered-equipments" ).is( ":visible" ) ) {
+			// The panel is hidden
+			_discoveredEquipmentsLastRefresh = Date.now();
+			_resumeDiscoveredEquipmentsRefresh();
+			return;
+		}
+		$.when( _getEquipmentsInfosAsync() )
+			.done( function( infos ) {
+				if ( infos.discoveredEquipments.length > 0 ) {
+					// Sort the discovered equipments by last update
+					infos.discoveredEquipments.sort( function( e1, e2 ) {
+						return e2.lastUpdate - e1.lastUpdate;
 					});
 					var html =	'<table><tr>'
-						+			'<th>' + Utils.getLangString( _prefix + "_address" ) + '</th>'
-						+			'<th>' + Utils.getLangString( _prefix + "_endpoint" ) + '</th>'
+						+			'<th>' + Utils.getLangString( _prefix + "_protocol" ) + '</th>'
+						+			'<th>' + Utils.getLangString( _prefix + "_id" ) + '</th>' // TODO : Frequency ?
 						+			'<th>' + Utils.getLangString( _prefix + "_signal_quality" ) + '</th>'
-						+			'<th>' + Utils.getLangString( _prefix + "_last_update" ) + '</th>'
 						+			'<th>' + Utils.getLangString( _prefix + "_feature" ) + '</th>'
-						+			'<th></th>'
 						+		'</tr>';
-					$.each( devicesInfos.discoveredDevices, function( i, discoveredDevice ) {
-						html += '<tr class="' + _prefix + '-discovered-device" data-address="' + discoveredDevice.address + '" data-end-point="' + discoveredDevice.endPoint + '">'
-							+		'<td>' + discoveredDevice.address + '</td>'
-							+		'<td>' + discoveredDevice.endPoint + '</td>'
-							+		'<td>' + ( discoveredDevice.quality >= 0 ? discoveredDevice.quality : '' ) + '</td>'
-							+		'<td>' + _convertTimestampToLocaleString( discoveredDevice.lastUpdate ) + '</td>'
+					$.each( infos.discoveredEquipments, function( i, discoveredEquipment ) {
+						html += '<tr class="' + _prefix + '-discovered-equipment">'
+							+		'<td>' + discoveredEquipment.protocol + '</td>'
+							+		'<td>' + discoveredEquipment.id + ( discoveredEquipment.address ? ' (' + discoveredEquipment.address + ')' : '' ) + '</td>'
+							+		'<td>' + ( discoveredEquipment.quality >= 0 ? discoveredEquipment.quality : '' ) + '</td>'
 							+		'<td>'
-							+			'<table class="' + _prefix + '-feature">';
-						$.each( discoveredDevice.features, function( featureName, feature ) {
-							html +=			'<tr>'
-								+				'<td>'
-								+					'<div class="font-weight-bold">' + featureName + '</div>'
-								+					( feature.data ? '<div class="' + _prefix + '-feature-data">' + feature.data + '</div>' : '' )
-								+				'</td><td width="40%">';
-							if ( feature.deviceTypes && ( feature.deviceTypes.length > 0 ) ) {
-								html +=				'<div class="' + _prefix + '-device-type" data-feature-name="' + featureName + '" data-settings="' + ( feature.settings ? feature.settings : '' ) + '">';
-								if ( feature.deviceTypes.length > 1 ) {
-									html +=				'<select>';
-									$.each( feature.deviceTypes, function( k, deviceType ) {
-										html +=				'<option value="' + deviceType + '">' + deviceType + '</option>';
-									} );
-									html +=				'</select>';
-								} else {
-									html +=	feature.deviceTypes[0];
+							+			'<div class="' + _prefix + '-equipment-last-update">' + _convertTimestampToLocaleString( discoveredEquipment.lastUpdate ) + '</div>';
+							//+			'<div class="font-weight-bold">' + discoveredEquipment.name + '</div>';
+						if ( discoveredEquipment.comment ) {
+							html +=		'<div>' + discoveredEquipment.comment + '</div>';
+						}
+						// Sort the capabilities
+						/*discoveredEquipment.capabilities.sort( function( c1, c2 ) {
+							return c1.name < c2.name ? -1 : c1.name > c2.name? 1 : 0;
+						});*/
+						$.each( discoveredEquipment.capabilities, function( j, capability ) {
+							html +=		'<div class="' + _prefix + '-equipment-capability">'
+								+			'<div class="' + _prefix + '-capability-name">'
+								+				capability.name
+								+			'</div>';
+
+							$.each( capability.modelings, function( k, modeling ) {
+								if ( modeling.isUsed === false ) {
+									return;
 								}
-								html +=				'</div>';
-							}
-							html +=				'</td>'
-								+			'</tr>';
-						} );
-						html +=			'</table>'
-							+		'</td>'
-							+		'<td>'
-							+			'<input type="checkbox">'
-							+		'</td>'
+								html +=		'<div class="' + _prefix + '-equipment-modeling" data-protocol="' + discoveredEquipment.protocol + '" data-equipment-id="' + discoveredEquipment.id + '" data-endpoint-id="' + ( capability.endpointId || '' ) + '" data-address="' + ( capability.address || '' )+ '">'
+									+			'<div class="' + _prefix + '-modeling-select">'
+									+				'<input type="checkbox">'
+									+			'</div>'
+									+			'<div class="' + _prefix + '-equipment-mappings">';
+								$.each( modeling.mappings, function( l, mapping ) {
+									if ( ( mapping.isUsed === false ) || !mapping.deviceTypes ) {
+										return;
+									}
+									var featureNames = [];
+									html +=			'<div class="' + _prefix + '-equipment-mapping">'
+										+				'<div class="' + _prefix + '-features">';
+									$.each( mapping.features, function( featureName, feature ) {
+										featureNames.push( featureName );
+										html +=				'<div class="' + _prefix + '-feature">'
+											+					'<span class="' + _prefix + '-feature-name">' + featureName + '</span>'
+											+					( feature.data ? '<span class="' + _prefix + '-feature-data">' + feature.data + ( feature.unit ? ' ' + feature.unit : '' ) + '</span>' : '' )
+											+				'</div>';
+									});
+									html +=				'</div>'
+										+				'<div class="' + _prefix + '-device-type" data-feature-names="' + featureNames.join(",") + '" data-settings="' + ( mapping.settings ? mapping.settings.join(",") : "" ) + '">';
+									if ( mapping.deviceTypes ) {
+										if ( mapping.deviceTypes.length > 1 ) {
+											html +=			'<select>';
+											$.each( mapping.deviceTypes, function( k, deviceType ) {
+												html +=			'<option value="' + deviceType + '">' + deviceType + '</option>';
+											} );
+											html +=			'</select>';
+										} else {
+											html +=	mapping.deviceTypes[0];
+										}
+									}
+									html +=				'</div>'
+										+			'</div>';
+								});
+								html +=			'</div>'
+									+		'</div>';
+							});
+							html +=		'</div>';
+						});
+						html +=		'</td>'
 							+	'</tr>';
 					});
 					html += '</table>';
-					$("#" + _prefix + "-discovered-devices").html( html );
+					$("#" + _prefix + "-discovered-equipments").html( html );
 				} else {
-					$("#" + _prefix + "-discovered-devices").html( Utils.getLangString( "zigate_no_discovered_device" ) );
+					$("#" + _prefix + "-discovered-equipments").html( Utils.getLangString( _prefix + "_no_discovered_equipment" ) );
 				}
-				_discoveredDevicesLastRefresh = Date.now();
-				_resumeDiscoveredDevicesRefresh();
-			} );
+				_discoveredEquipmentsLastRefresh = Date.now();
+				_resumeDiscoveredEquipmentsRefresh();
+			})
+			.fail( function() {
+				$("#" + _prefix + "-discovered-equipments").html( Utils.getLangString( _prefix + "_communication_error" ) );
+				_discoveredEquipmentsLastRefresh = Date.now();
+				_resumeDiscoveredEquipmentsRefresh();
+			});
 	}
 
 	/**
-	 * Show ziblue discovered devices
+	 * Show discovered equipments
 	 */
-	function _showDiscoveredDevices( deviceId ) {
+	function _showDiscoveredEquipments( deviceId ) {
 		if ( deviceId ) {
 			_deviceId = deviceId;
 		}
@@ -998,39 +1211,47 @@ var ZiGateGateway = ( function( api, $ ) {
 			$.when( _loadResourcesAsync(), _loadLocalizationAsync() ).then( function() {
 				api.setCpanelContent(
 						'<div id="' + _prefix + '-discovered-panel" class="' + _prefix + '-panel">'
-					+		'<h1>' + Utils.getLangString( _prefix + "_discovered_devices" ) + '</h1>'
+					+		'<h1>' + Utils.getLangString( _prefix + "_discovered_equipments" ) + '</h1>'
 					+		'<div class="scenes_section_delimiter"></div>'
 					+		'<div class="' + _prefix + '-toolbar">'
 					+			'<button type="button" class="' + _prefix + '-inclusion"><i class="fa fa-sign-in fa-lg fa-rotate-90 text-danger" aria-hidden="true"></i>&nbsp;' + Utils.getLangString( _prefix + "_inclusion" ) + '</button>'
 					+			'<button type="button" class="' + _prefix + '-help"><i class="fa fa-question fa-lg text-info" aria-hidden="true"></i>&nbsp;' + Utils.getLangString( _prefix + "_help" ) + '</button>'
+					//+			'<button type="button" class="' + _prefix + '-ignore"><span class="icon icon-ignore"></span>' + Utils.getLangString( _prefix + "_ignore" ) + '</button>'
+					+			'<button type="button" class="' + _prefix + '-refresh" style="display: none"><span class="icon icon-refresh"></span>' + Utils.getLangString( _prefix + "_refresh" ) + '</button>'
 					+			'<button type="button" class="' + _prefix + '-learn"><i class="fa fa-plus fa-lg" aria-hidden="true"></i>&nbsp;' + Utils.getLangString( _prefix + "_learn" ) + '</button>'
 					+		'</div>'
 					+		'<div class="' + _prefix + '-explanation ' + _prefix + '-hidden">'
-					+			Utils.getLangString( _prefix + "_explanation_discovered_devices" )
+					+			Utils.getLangString( _prefix + "_explanation_discovered_equipments" )
 					+		'</div>'
-					+		'<div id="' + _prefix + '-discovered-devices" class="' + _prefix + '-devices">'
+					+		'<div id="' + _prefix + '-discovered-equipments" class="' + _prefix + '-equipments">'
 					+			Utils.getLangString( _prefix + "_loading" )
 					+		'</div>'
 					+	'</div>'
 				);
 
-				function _getSelectedItems() {
-					var items = [];
-					$( "#" + _prefix + "-discovered-devices input:checked:visible" ).each( function() {
-						var $device = $( this ).parents( "." + _prefix + "-discovered-device" );
-						var address = $device.data( "address" );
-						var endPoint = $device.data( "end-point" );
-						var features = [];
-						$device.find( "." + _prefix + "-device-type" )
+				function _getSelectedMappings() {
+					var mappings = [];
+					$( "#" + _prefix + "-discovered-equipments input:checked:visible" ).each( function() {
+						var $modeling = $( this ).parents( "." + _prefix + "-equipment-modeling" );
+						var protocol = $modeling.data( "protocol" );
+						var equipmentId = $modeling.data( "equipment-id" );
+						var address = $modeling.data( "address" );
+						var endpointId = $modeling.data( "endpoint-id" );
+						$modeling.find( "." + _prefix + "-device-type" )
 							.each( function( index ) {
-								var featureName = $( this ).data( 'feature-name' );
 								var $select = $( this ).find( "select" );
-								var deviceType = ( $select.length > 0 ) ? $select.val() : $( this ).text();
-								features.push( { "names": [ featureName ], "deviceType": deviceType, "settings": $( this ).data( 'settings' ) || "" } );
+								mappings.push({
+									protocol: protocol,
+									address: address,
+									equipmentId: equipmentId,
+									endpointId: endpointId,
+									deviceType: ( ( $select.length > 0 ) ? $select.val() : $( this ).text() ),
+									featureNames: $( this ).data( "feature-names" ).split( "," ),
+									settings: $( this ).data( "settings" ).split( "," )
+								});
 							});
-						items.push( { "address": address, "endPoint": endPoint, "features": features } );
 					});
-					return items;
+					return mappings;
 				}
 
 				// Manage UI events
@@ -1043,6 +1264,7 @@ var ZiGateGateway = ( function( api, $ ) {
 									.removeClass( "fa-sign-in" )
 									.addClass( "fa-spinner fa-pulse");
 								setTimeout( function(){
+									$( "#" + _prefix + "-discovered-panel ." + _prefix + "-inclusion" ).prop( "disabled", false );
 									$( "#" + _prefix + "-discovered-panel ." + _prefix + "-inclusion i" )
 										.removeClass( "fa-spinner fa-pulse")
 										.addClass( "fa-sign-in" );
@@ -1053,16 +1275,25 @@ var ZiGateGateway = ( function( api, $ ) {
 						$( "." + _prefix + "-explanation" ).toggleClass( _prefix + "-hidden" );
 					} )
 					.on( "click", "." + _prefix + "-learn", function( e ) {
-						var items = _getSelectedItems();
-						if ( items.length === 0 ) {
-							api.ui.showMessagePopup( Utils.getLangString( _prefix + "_select_device" ), 1 );
+						var mappings = _getSelectedMappings();
+						if ( mappings.length === 0 ) {
+							api.ui.showMessagePopup( Utils.getLangString( _prefix + "_select_equipment" ), 1 );
 						} else {
-							api.ui.showMessagePopup( Utils.getLangString( _prefix + "_confirmation_learning_devices" ) + " <pre>" + JSON.stringify( items, undefined, 2 ) + "</pre>", 4, 0, {
+							var message = "";
+							$.each( mappings, function( i, mapping ) {
+								message += mapping.protocol + ';' + mapping.equipmentId
+										+	( mapping.address ? ';' + mapping.address : '' )
+										+	( mapping.endpointId ? ';' + mapping.endpointId : '' )
+										+	( mapping.featureNames ? ';' + mapping.featureNames.join(',') : '' )
+										+	';' + mapping.deviceType
+										+	'\n';
+							} );
+							api.ui.showMessagePopup( Utils.getLangString( _prefix + "_confirmation_learning_equipments" ) + " <pre>" + message + "</pre>", 4, 0, {
 								onSuccess: function() {
-									$.when( _performActionCreateDevices( items ) )
+									$.when( _performActionCreateDevices( mappings ) )
 										.done( function() {
 											_showReload( Utils.getLangString( _prefix + "_devices_have_been_created" ), function() {
-												_showDevices();
+												_showEquipments();
 											});
 										});
 									return true;
@@ -1074,32 +1305,32 @@ var ZiGateGateway = ( function( api, $ ) {
 						alert( "TODO" );
 					})
 					.on( "focus", "select", function( e ) {
-						_stopDiscoveredDevicesRefresh();
+						_stopDiscoveredEquipmentsRefresh();
 					})
 					.on( "blur", "select", function( e ) {
 						if ( $( "#" + _prefix + "-discovered-panel input:checked" ).length === 0 ) {
-							_resumeDiscoveredDevicesRefresh();
+							_resumeDiscoveredEquipmentsRefresh();
 						}
 					})
 					.on( "change", "select", function( e ) {
 						if ( $( "#" + _prefix + "-discovered-panel input:checked" ).length === 0 ) {
-							_resumeDiscoveredDevicesRefresh();
+							_resumeDiscoveredEquipmentsRefresh();
 						}
 					})
 					.on( "change", "input:checkbox", function( e ) {
 						if ( $( "#" + _prefix + "-discovered-panel input:checked" ).length > 0 ) {
-							_stopDiscoveredDevicesRefresh();
+							_stopDiscoveredEquipmentsRefresh();
 						} else {
-							_resumeDiscoveredDevicesRefresh();
+							_resumeDiscoveredEquipmentsRefresh();
 						}
 					})
 					;
 
-				// Show discovered devices infos
-				_drawDiscoveredDevicesList();
+				// Show discovered equipments infos
+				_drawDiscoveredEquipmentsList();
 			});
 		} catch (err) {
-			Utils.logError( "Error in " + _pluginName + ".showDevices(): " + err );
+			Utils.logError( "Error in " + _pluginName + ".showDiscoveredEquipments(): " + err );
 		}
 	}
 
@@ -1110,8 +1341,22 @@ var ZiGateGateway = ( function( api, $ ) {
 	/**
 	 * 
 	 */
+	function _performActionSetParam( variable, value ) {
+		Utils.logDebug( "[" + _pluginName + ".performActionSetParam] Parameter " + variable + "=" + value );
+		return Utils.performActionOnDevice(
+			_deviceId, PLUGIN_SID, "SetParam", {
+				output_format: "json",
+				paramName: variable,
+				paramValue: value
+			}
+		);
+	}
+
+	/**
+	 * 
+	 */
 	function _performActionRefresh() {
-		Utils.logDebug( "[" + _pluginName + ".performActionRefresh] Refresh the list of external devices" );
+		Utils.logDebug( "[" + _pluginName + ".performActionRefresh] Refresh the list of equipments" );
 		return Utils.performActionOnDevice(
 			_deviceId, PLUGIN_SID, "Refresh", {
 				output_format: "json"
@@ -1120,15 +1365,15 @@ var ZiGateGateway = ( function( api, $ ) {
 	}
 
 	/**
-	 * 
+	 * Create devices linked to an equipment
 	 */
-	function _performActionCreateDevices( items ) {
-		var jsonItems = JSON.stringify( items );
-		Utils.logDebug( "[" + _pluginName + ".performActionCreateDevices] Create external product/features '" + jsonItems + "'" );
+	function _performActionCreateDevices( mappings ) {
+		var jsonMappings = JSON.stringify( mappings );
+		Utils.logDebug( "[" + _pluginName + ".performActionCreateDevices] Create devices '" + jsonMappings + "'" );
 		return Utils.performActionOnDevice(
 			_deviceId, PLUGIN_SID, "CreateDevices", {
 				output_format: "json",
-				items: encodeURIComponent( jsonItems )
+				mappings: encodeURIComponent( jsonMappings )
 			}
 		);
 	}
@@ -1141,22 +1386,6 @@ var ZiGateGateway = ( function( api, $ ) {
 		return Utils.performActionOnDevice(
 			_deviceId, PLUGIN_SID, "Inclusion", {
 				output_format: "json"
-			}
-		);
-	}
-
-	/**
-	 * Associate external device to Vera devices
-	 */
-	function _performActionAssociate( address, endPoint, featureName, encodedAssociation ) {
-		Utils.logDebug( "[" + _pluginName + ".performActionAssociate] Associate external product/feature '" + address + ";" + endPoint + "/" + featureName + "' with " + encodedAssociation );
-		return Utils.performActionOnDevice(
-			_deviceId, PLUGIN_SID, "Associate", {
-				output_format: "json",
-				address: address,
-				endPoint: endPoint,
-				feature: featureName,
-				association: encodeURIComponent( encodedAssociation )
 			}
 		);
 	}
@@ -1215,7 +1444,10 @@ var ZiGateGateway = ( function( api, $ ) {
 				} else {
 					$( "#" + _prefix + "-errors" ).html( Utils.getLangString( _prefix + "_no_error" ) );
 				}
-			} );
+			})
+			.fail( function() {
+				$("#" + _prefix + "-errors").html( Utils.getLangString( _prefix + "_communication_error" ) );
+			});
 	}
 
 	/**
@@ -1229,22 +1461,22 @@ var ZiGateGateway = ( function( api, $ ) {
 						'<div id="' + _prefix + '-errors-panel" class="' + _prefix + '-panel">'
 					+		'<h1>' + Utils.getLangString( _prefix + "_errors" ) + '</h1>'
 					+		'<div class="scenes_section_delimiter"></div>'
-					/*+		'<div class="' + _prefix + '-toolbar">'
+					+		'<div class="' + _prefix + '-toolbar">'
 					+			'<button type="button" class="' + _prefix + '-help"><i class="fa fa-question fa-lg text-info" aria-hidden="true"></i>&nbsp;' + Utils.getLangString( _prefix + "_help" ) + '</button>'
 					+		'</div>'
 					+		'<div class="' + _prefix + '-explanation ' + _prefix + '-hidden">'
 					+			Utils.getLangString( _prefix + "_explanation_errors" )
-					+		'</div>'*/
+					+		'</div>'
 					+		'<div id="' + _prefix + '-errors">'
 					+			Utils.getLangString( _prefix + "_loading" )
 					+		'</div>'
 					+	'</div>'
 				);
 				// Manage UI events
-				/*$( "#" + _prefix + "-errors-panel" )
+				$( "#" + _prefix + "-errors-panel" )
 					.on( "click", "." + _prefix + "-help" , function() {
 						$( "." + _prefix + "-explanation" ).toggleClass( _prefix + "-hidden" );
-					} );*/
+					} );
 				// Display the errors
 				_drawErrorsList();
 			});
@@ -1285,8 +1517,9 @@ MIIHXwYJKoZIhvcNAQcEoIIHUDCCB0wCAQExggEwMIIBLAIBADCBlDCBjjELMAkGA1UEBhMCVVMxCzAJ
 
 	myModule = {
 		uuid: _uuid,
-		showDevices: _showDevices,
-		showDiscoveredDevices: _showDiscoveredDevices,
+		showSettings: _showSettings,
+		showEquipments: _showEquipments,
+		showDiscoveredEquipments: _showDiscoveredEquipments,
 		showErrors: _showErrors,
 		showDonate: _showDonate,
 
