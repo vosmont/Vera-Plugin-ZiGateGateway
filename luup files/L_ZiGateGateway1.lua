@@ -22,7 +22,7 @@ local hasBit, bit = pcall( require , "bit" )
 
 _NAME = "ZiGateGateway"
 _DESCRIPTION = "ZiGate gateway for the Vera"
-_VERSION = "1.1"
+_VERSION = "1.2"
 _AUTHOR = "vosmont"
 
 -- **************************************************
@@ -411,7 +411,8 @@ local CAPABILITIES = {
 				modelings = {
 					{
 						mappings = {
-							{ features = { "scene", "face" }, deviceTypes = { "SCENE_CONTROLLER" }, settings = { "transmitter" } }
+							--{ features = { "scene", "face" }, deviceTypes = { "SCENE_CONTROLLER" }, settings = { "transmitter" } }
+							{ features = { "scene" }, deviceTypes = { "SCENE_CONTROLLER" }, settings = { "transmitter" } }
 						}
 					}
 				},
@@ -1497,11 +1498,15 @@ ATTR_TYPES = {
 	uint16 = 0x21,
 	uint32 = 0x22,
 	uint48 = 0x25,
+	uint64 = 0x27, -- ??
 	int8 = 0x28,
 	int16 = 0x29,
 	int32 = 0x2A,
 	IEEE754 = 0x39,
-	string = 0x42
+	string = 0x42,
+	-- Custom types
+	hex16 = 0xF1,
+	hex64 = 0xF7
 }
 
 ZIGBEE_STATUS = {
@@ -1553,7 +1558,22 @@ function _getAttrValue( attrType, strData )
 		return bit.lshift( strData:byte( 1 ), 24 ) + bit.lshift( strData:byte( 2 ), 16 ) + bit.lshift( strData:byte( 3 ), 8 ) + strData:byte( 4 )
 
 	elseif ( attrType == ATTR_TYPES.uint64 ) then
+		-- Seems to raise arithmetic overflow
 		return bit.lshift( strData:byte( 1 ), 56 ) + bit.lshift( strData:byte( 2 ), 48 ) + bit.lshift( strData:byte( 3 ), 40 ) + bit.lshift( strData:byte( 4 ), 32 ) + bit.lshift( strData:byte( 5 ), 24 ) + bit.lshift( strData:byte( 6 ), 16 ) + bit.lshift( strData:byte( 7 ), 8 ) + strData:byte( 8 )
+
+	elseif ( attrType == ATTR_TYPES.hex16 ) then
+		local result = ""
+		for i = 1, 2 do
+			result = result .. number_toHex( strData:byte( i ) )
+		end
+		return result
+
+	elseif ( attrType == ATTR_TYPES.hex64 ) then
+		local result = ""
+		for i = 1, 8 do
+			result = result .. number_toHex( strData:byte( i ) )
+		end
+		return result
 
 	elseif ( attrType == ATTR_TYPES.int8 ) then
 		return strData:byte( 1 )
@@ -1577,8 +1597,10 @@ ZIGATE_MESSAGE = {
 
 	-- Equipment announce
 	["004D"] = function( payload, quality )
-		local address = number_toHex( _getAttrValue( ATTR_TYPES.uint16, payload:sub( 1, 2 ) ) )
-		local IEEEAddress = number_toHex( _getAttrValue( ATTR_TYPES.uint64, payload:sub( 3, 10 ) ) )
+		--local address = number_toHex( _getAttrValue( ATTR_TYPES.uint16, payload:sub( 1, 2 ) ) )
+		local address = _getAttrValue( ATTR_TYPES.hex16, payload:sub( 1, 2 ) )
+		--local IEEEAddress = number_toHex( _getAttrValue( ATTR_TYPES.uint64, payload:sub( 3, 10 ) ) )
+		local IEEEAddress = _getAttrValue( ATTR_TYPES.hex64, payload:sub( 3, 10 ) )
 		local capability = _getAttrValue( ATTR_TYPES.uint8, payload:sub( 11, 11 ) )
 		local isBatteryPowered = ( bit.band( capability, 4 ) == 0 )
 		debug( "Equipment announce: (id:0x" .. tostring(IEEEAddress) .. "), (address:0x" .. number_toHex(address) .. "), (isBatteryPowered:" .. tostring(isBatteryPowered) .. ")", "Network.receive" )
@@ -1636,8 +1658,10 @@ ZIGATE_MESSAGE = {
 		while ( i < iMax ) do
 			deviceStr = payload:sub( i, i + 12 )
 			local pos = _getAttrValue( ATTR_TYPES.uint8, deviceStr:sub( 1, 1 ) )
-			local address = number_toHex( _getAttrValue( ATTR_TYPES.uint16, deviceStr:sub( 2, 3 ) ) )
-			local IEEEAddress = number_toHex( _getAttrValue( ATTR_TYPES.uint64, deviceStr:sub( 4, 11 ) ) )
+			--local address = number_toHex( _getAttrValue( ATTR_TYPES.uint16, deviceStr:sub( 2, 3 ) ) )
+			local address = _getAttrValue( ATTR_TYPES.hex16, deviceStr:sub( 2, 3 ) )
+			--local IEEEAddress = number_toHex( _getAttrValue( ATTR_TYPES.uint64, deviceStr:sub( 4, 11 ) ) )
+			local IEEEAddress = _getAttrValue( ATTR_TYPES.hex64, deviceStr:sub( 4, 11 ) )
 			local isBatteryPowered = not _getAttrValue( ATTR_TYPES.boolean, deviceStr:sub( 12, 12 ) )
 			local quality = number_toHex( _getAttrValue( ATTR_TYPES.uint8, deviceStr:sub( 13, 13 ) ) )
 			debug( "Equipment (pos:" .. tostring(pos) .. "), (id:0x" .. tostring(IEEEAddress) .. "), (address:0x" .. tostring(address) .. "), (isBatteryPowered:" .. tostring(isBatteryPowered) .. ")", "Network.receive" )
@@ -1667,7 +1691,7 @@ ZIGATE_MESSAGE = {
 		local sqn = payload:byte( 1 )
 		local address = string_toHex( payload:sub( 2, 3 ) ) -- ZigBee address
 		local endpointId = string_toHex( payload:sub( 4, 4 ) )
-		local msg = "Attribute Report: (address:0x:".. address .. "), (endpoint:0x" .. endpointId .. ")"
+		local msg = "Attribute Report: (address:0x".. address .. "), (endpoint:0x" .. endpointId .. ")"
 		local clusterId = string_toHex( payload:sub( 5, 6 ) )
 		local attrId = string_toHex( payload:sub( 7, 8 ) )
 		local attrStatus = payload:byte( 9 )
@@ -1744,6 +1768,10 @@ Commands = {
 		if equipment then
 			equipment.frequency = infos.frequency
 			equipment.quality = infos.quality
+			if string_isEmpty(equipmentId) then
+				equipmentId = equipment.id
+				msg = "Equipment " .. Tools.getEquipmentInfo( protocol, equipmentId, address, endpointId )
+			end
 			if equipment.isNew then
 				-- No command on a new equipment (not yet handled by the home automation controller)
 				debug( msg .. " is new : do nothing", "Commands.add" )
@@ -1768,14 +1796,17 @@ Commands = {
 
 		if ( not cmd.broadcast and ( cmd.name ~= "battery" ) and ( not equipment or not feature ) ) then
 			-- Add this equipment or feature to the discovered equipments (but not yet known)
-			local hasBeenAdded, isFeatureKnown = DiscoveredEquipments.add( protocol, equipmentId, address, endpointId, infos, cmd.name, cmd.data, cmd.unit )
+			msg = msg .. ",(command:" .. cmd.name .. ")"
+			local hasBeenAdded, hasCapabilityBeenAdded, isFeatureKnown = DiscoveredEquipments.add( protocol, equipmentId, address, endpointId, infos, cmd.name, cmd.data, cmd.unit )
 			if hasBeenAdded then
-				debug( msg .. " is unknown for command '" .. cmd.name .. "'", "Commands.add" )
+				debug( msg .. " was unknown", "Commands.add" )
+			elseif hasCapabilityBeenAdded then
+				debug( msg .. " was unknown for this command", "Commands.add" )
 			elseif not isFeatureKnown then
 				error( msg .. ": feature '" .. cmd.name .. "' is not known", "Commands.add" )
 				return false
 			else
-				debug( msg .. " is already discovered for command '" .. cmd.name .. "'", "Commands.add" )
+				debug( msg .. " is already discovered", "Commands.add" )
 			end
 		end
 		return true
@@ -2271,7 +2302,7 @@ DiscoveredEquipments = {
 		if ( isFeatureKnown and hasCapabilityBeenAdded ) then
 			debug( "Discovered equipment " .. Tools.getEquipmentSummary(discoveredEquipment) .. " has a new feature '" .. featureName .. "'", "DiscoveredEquipments.add" )
 		end
-		return hasBeenAdded, isFeatureKnown
+		return hasBeenAdded, hasCapabilityBeenAdded, isFeatureKnown
 	end,
 
 	get = function( protocol, equipmentId )
@@ -2284,7 +2315,7 @@ DiscoveredEquipments = {
 	end,
 
 	remove = function( protocol, equipmentId )
-		if ( ( protocol ~= nil ) and ( equipmentId ~= nil ) ) then
+		if ( not string_isEmpty(protocol) and not string_isEmpty(equipmentId) ) then
 			local key = protocol .. ";" .. equipmentId
 			local discoveredEquipment = _indexDiscoveredEquipmentsByProtocolEquipmentId[ key ]
 			for i, equipment in ipairs( _discoveredEquipments ) do
@@ -2369,6 +2400,9 @@ Equipments = {
 		formerEquipments = nil
 
 		log("Found " .. tostring(#_equipments) .. " equipment(s)", "Equipments.retrieve")
+
+		-- Get devices list from the controller (to check with our children)
+		Network.send( "0015", "" )
 	end,
 
 	-- Add a device
@@ -2893,8 +2927,6 @@ function init( lul_device )
 
 		-- Get ZiGate version
 		Network.send( "0010", "" )
-		-- Get devices list
-		Network.send( "0015", "" )
 		-- Start ZigBee network
 		Network.send( "0024", "" )
 		-- Start polling engine

@@ -516,7 +516,11 @@ var ZiGateGateway = ( function( api, $ ) {
 						html += '<tr class="' + _prefix + '-known-equipment">'
 							+		'<td>' + equipment.roomName + '</td>'
 							+		'<td>' + equipment.protocol + '</td>'
-							+		'<td>' + equipment.id + ( equipment.address ? ' (' + equipment.address + ')' : '' ) + ( equipment.isNew ? ' <span style="color:red">NEW</span>' : '' ) + '</td>'
+							+		'<td>'
+							+			equipment.id + ( equipment.address ? ' (' + equipment.address + ')' : '' )
+							+			( equipment.isNew ? ' <span style="color:red">NEW</span>' : '' )
+							+			( equipment.isKnown == false ? ' <span style="color:red">UNKNOWN</span>' : '' )
+							+		'</td>'
 							+		'<td>' + ( equipment.quality >= 0 ? equipment.quality : '' ) + '</td>'
 							+		'<td>'
 /*
