@@ -1140,6 +1140,7 @@ var ZiGateGateway = ( function( api, $ ) {
 							html +=		'<div class="' + _prefix + '-equipment-capability">'
 								+			'<div class="' + _prefix + '-capability-name">'
 								+				capability.name
+								+				( capability.data ? '<span class="' + _prefix + '-feature-data">' + capability.data + '</span>' : '' )
 								+			'</div>';
 
 							$.each( capability.modelings, function( k, modeling ) {

@@ -22,7 +22,7 @@ local hasBit, bit = pcall( require , "bit" )
 
 _NAME = "ZiGateGateway"
 _DESCRIPTION = "ZiGate gateway for the Vera"
-_VERSION = "1.2"
+_VERSION = "1.3"
 _AUTHOR = "vosmont"
 
 -- **************************************************
@@ -250,7 +250,7 @@ local CAPABILITIES = {
 			[ "0001" ] = {
 				name = "Application version",
 				getCommands = function( value )
-					debug( "(application version:" .. tostring(value) .. ")", "Network.receive" )
+					return { { name = "version", data = value, info = "application_version" } }
 				end
 			},
 			[ "0005" ] = { -- Model info Xiaomi
@@ -1505,6 +1505,7 @@ ATTR_TYPES = {
 	IEEE754 = 0x39,
 	string = 0x42,
 	-- Custom types
+	hex8 = 0xF0,
 	hex16 = 0xF1,
 	hex64 = 0xF7
 }
@@ -1561,6 +1562,9 @@ function _getAttrValue( attrType, strData )
 		-- Seems to raise arithmetic overflow
 		return bit.lshift( strData:byte( 1 ), 56 ) + bit.lshift( strData:byte( 2 ), 48 ) + bit.lshift( strData:byte( 3 ), 40 ) + bit.lshift( strData:byte( 4 ), 32 ) + bit.lshift( strData:byte( 5 ), 24 ) + bit.lshift( strData:byte( 6 ), 16 ) + bit.lshift( strData:byte( 7 ), 8 ) + strData:byte( 8 )
 
+	elseif ( attrType == ATTR_TYPES.hex8 ) then
+		return number_toHex( strData:byte( 1 ) )
+
 	elseif ( attrType == ATTR_TYPES.hex16 ) then
 		local result = ""
 		for i = 1, 2 do
@@ -1597,46 +1601,52 @@ ZIGATE_MESSAGE = {
 
 	-- Equipment announce
 	["004D"] = function( payload, quality )
-		--local address = number_toHex( _getAttrValue( ATTR_TYPES.uint16, payload:sub( 1, 2 ) ) )
-		local address = _getAttrValue( ATTR_TYPES.hex16, payload:sub( 1, 2 ) )
-		--local IEEEAddress = number_toHex( _getAttrValue( ATTR_TYPES.uint64, payload:sub( 3, 10 ) ) )
-		local IEEEAddress = _getAttrValue( ATTR_TYPES.hex64, payload:sub( 3, 10 ) )
-		local capability = _getAttrValue( ATTR_TYPES.uint8, payload:sub( 11, 11 ) )
+		local address = string_toHex( payload:sub( 1, 2 ) )
+		local IEEEAddress = string_toHex( payload:sub( 3, 10 ) )
+		local capability = payload:byte( 11 )
 		local isBatteryPowered = ( bit.band( capability, 4 ) == 0 )
-		debug( "Equipment announce: (id:0x" .. tostring(IEEEAddress) .. "), (address:0x" .. number_toHex(address) .. "), (isBatteryPowered:" .. tostring(isBatteryPowered) .. ")", "Network.receive" )
+		debug( "Equipment announce: (id:" .. tostring(IEEEAddress) .. "),(address:" .. tostring(address) .. "),(isBatteryPowered:" .. tostring(isBatteryPowered) .. ")", "Network.receive" )
 		local equipment = Equipments.get( "ZIGBEE", IEEEAddress )
 		if equipment then
 			equipment.isBatteryPowered = isBatteryPowered
 			-- Check if address has changed
 			if ( equipment.address ~= address ) then
 				Equipments.changeAddress( equipment, address )
-				Equipments.retrieve()
 			end
 		else
 			DiscoveredEquipments.add( "ZIGBEE", IEEEAddress, address, nil, { isBatteryPowered = isBatteryPowered } )
+			equipment = DiscoveredEquipments.get( "ZIGBEE", IEEEAddress )
 		end
+		if ( equipment.lastCommand ~= "004D" ) then
+			-- Get endpoints
+			debug( "Get endpoints of equipment (address:" .. tostring(address) .. ")", "Network.receive" )
+			Network.send( "0045", address )
+		end
+		equipment.lastCommand = "004D"
+		equipment.lastUpdate = os.time()
 		return true
 	end,
 
 	-- Status
 	["8000"] = function( payload, quality )
-		local status = _getAttrValue( ATTR_TYPES.uint8, payload:sub( 1, 1 ) )
-		local sequenceNumber = _getAttrValue( ATTR_TYPES.uint8, payload:sub( 2, 2 ) )
-		local paquetType = _getAttrValue( ATTR_TYPES.uint16, payload:sub( 3, 4 ) )
-		-- TODO : paquetType = la demande
+		local status = payload:byte( 1 )
+		local sequenceNumber = payload:byte( 2 )
+		local paquetType = string_toHex( payload:sub( 3, 4 ) )
+		local optionalInfo = payload:sub( 5 )
+		-- TODO : paquetType = la demande source - faire une file des demandes avec leur statut
 		local errorInformation = payload:sub( 5 )
-		debug( "(status:" .. tostring(ZIGBEE_STATUS[tostring(status)]) .. "), (sqn:" .. tostring(sequenceNumber) .. ")", "Network.receive" )
+		debug( "Status: (status:" .. tostring(ZIGBEE_STATUS[tostring(status)] or status) .. "),(sqn:" .. tostring(sequenceNumber) .. "),(info:" .. tostring(optionalInfo) .. ")", "Network.receive" )
 		if ( status > 0 ) then
-			error( "ZigBee error : (status:" .. tostring(ZIGBEE_STATUS[tostring(status)]) .. "),(paquetType:" .. tostring(paquetType) .. ") " .. tostring(errorInformation), "Network.receive" )
+			error( "ZigBee error: (status:" .. tostring(ZIGBEE_STATUS[tostring(status)] or status) .. "),(paquetType:" .. tostring(paquetType) .. ") " .. tostring(errorInformation), "Network.receive" )
 		end
 		return true
 	end,
 
 	-- Version
 	["8010"] = function( payload, quality )
-		SETTINGS.system.majorVersion = _getAttrValue( ATTR_TYPES.uint16, payload:sub( 1, 2 ) )
-		SETTINGS.system.installerVersion = _getAttrValue( ATTR_TYPES.uint16, payload:sub( 3, 4 ) )
-		debug( "(version:" .. tostring(SETTINGS.system.majorVersion) .. "." .. number_toHex(SETTINGS.system.installerVersion) .. ")", "Network.receive" )
+		SETTINGS.system.majorVersion =  string_toHex( payload:sub( 1, 2 ) )
+		SETTINGS.system.installerVersion = string_toHex( payload:sub( 3, 4 ) )
+		debug( "ZiGate (version:" .. tostring(SETTINGS.system.majorVersion) .. "." .. number_toHex(SETTINGS.system.installerVersion) .. ")", "Network.receive" )
 		return true
 	end,
 
@@ -1651,20 +1661,17 @@ ZIGATE_MESSAGE = {
 
 	-- Device list
 	["8015"] = function( payload, quality )
-		debug( "Get equipment list", "Network.receive" )
+		debug( "Get equipment list:", "Network.receive" )
 		local i, iMax = 1, string.len(payload)
-		local hasAddressChanged = false
 		local deviceStr
 		while ( i < iMax ) do
 			deviceStr = payload:sub( i, i + 12 )
-			local pos = _getAttrValue( ATTR_TYPES.uint8, deviceStr:sub( 1, 1 ) )
-			--local address = number_toHex( _getAttrValue( ATTR_TYPES.uint16, deviceStr:sub( 2, 3 ) ) )
-			local address = _getAttrValue( ATTR_TYPES.hex16, deviceStr:sub( 2, 3 ) )
-			--local IEEEAddress = number_toHex( _getAttrValue( ATTR_TYPES.uint64, deviceStr:sub( 4, 11 ) ) )
-			local IEEEAddress = _getAttrValue( ATTR_TYPES.hex64, deviceStr:sub( 4, 11 ) )
+			local pos = deviceStr:byte( 1 )
+			local address = string_toHex( deviceStr:sub( 2, 3 ) )
+			local IEEEAddress = string_toHex( deviceStr:sub( 4, 11 ) )
 			local isBatteryPowered = not _getAttrValue( ATTR_TYPES.boolean, deviceStr:sub( 12, 12 ) )
-			local quality = number_toHex( _getAttrValue( ATTR_TYPES.uint8, deviceStr:sub( 13, 13 ) ) )
-			debug( "Equipment (pos:" .. tostring(pos) .. "), (id:0x" .. tostring(IEEEAddress) .. "), (address:0x" .. tostring(address) .. "), (isBatteryPowered:" .. tostring(isBatteryPowered) .. ")", "Network.receive" )
+			local quality = string_toHex( deviceStr:sub( 13, 13 ) )
+			debug( "  Equipment (pos:" .. tostring(pos) .. "),(id:" .. tostring(IEEEAddress) .. "),(address:" .. tostring(address) .. "),(isBatteryPowered:" .. tostring(isBatteryPowered) .. ")", "Network.receive" )
 			i = i + 13
 
 			local equipment = Equipments.get( "ZIGBEE", IEEEAddress )
@@ -1673,16 +1680,70 @@ ZIGATE_MESSAGE = {
 				-- Check if address has changed
 				if ( equipment.address ~= address ) then
 					Equipments.changeAddress( equipment, address )
-					hasAddressChanged = true
 				end
 			else
 				-- Equipment is not known for HA system
 				DiscoveredEquipments.add( "ZIGBEE", IEEEAddress, address, nil, { isBatteryPowered = isBatteryPowered, quality = quality } )
 			end
 		end
-		if hasAddressChanged then
-			Equipments.retrieve()
+		return true
+	end,
+
+	-- Simple Descriptor Response
+	["8043"] = function( payload, quality )
+		local sqn = payload:byte( 1 )
+		local status = payload:byte( 2 )
+		local address = string_toHex( payload:sub( 3, 4 ) )
+		local length = payload:byte( 5 )
+		local endpointId = string_toHex( payload:sub( 6, 6 ) )
+		local profile = string_toHex( payload:sub( 7, 8 ) )
+		local modelId = string_toHex( payload:sub( 9, 10 ) )
+		local bitField = payload:byte( 11 )
+		debug( "Simple Descriptor Response: (address:" .. tostring(address) .. "),(status:" .. tostring(status) .. "),(profileId:" .. tostring(profile) .. ")", "Network.receive" )
+		local pos = 12
+		local inClusterCount = payload:byte( pos ) or 0
+		debug( "Input cluster count: " .. tostring(inClusterCount), "Network.receive" )
+		pos = pos + 1
+		for i = 1, inClusterCount do
+			local cluster = string_toHex( payload:sub( pos, pos + 1 ) )
+			debug( "  (clusterId:" .. tostring(cluster) .. ")", "Network.receive" )
+			pos = pos + 2
 		end
+		local outClusterCount = payload:byte( pos ) or 0
+		debug( "Output cluster count: " .. tostring(outClusterCount), "Network.receive" )
+		pos = pos + 1
+		for i = 1, outClusterCount do
+			local cluster = string_toHex( payload:sub( pos, pos + 1 ) )
+			debug( "  (clusterId:" .. tostring(cluster) .. ")", "Network.receive" )
+			pos = pos + 2
+		end
+
+		return true
+	end,
+
+	-- Active Endpoint response
+	["8045"] = function( payload, quality )
+		local sqn = payload:byte( 1 )
+		local status = payload:byte( 2 )
+		local address = string_toHex( payload:sub( 3, 4 ) )
+		local nbEndpoints = payload:byte( 5 ) or 0
+		debug( "Active Endpoint response: (address:" .. tostring(address) .. "),(nbEndpoints:" .. tostring(nbEndpoints).. "),(status:" .. tostring(status) .. ")", "Network.receive" )
+		for i = 1, nbEndpoints do
+			local endpointId = string_toHex( payload:sub( 5 + i, 5 + i ) )
+			debug( "Get description of (endpointId:" .. tostring(endpointId) .. ")", "Network.receive" )
+			-- Simple Descriptor request
+			Network.send( "0043", address .. endpointId )
+		end
+		return true
+	end,
+
+	-- Leave indication
+	["8048"] = function( payload, quality )
+		local IEEEAddress = string_toHex( payload:sub( 1, 8 ) )
+		local status = payload:byte( 9 )
+		debug( "Leave indication: (id:" .. tostring(IEEEAddress) .. "),(status:" .. tostring(status) .. ")", "Network.receive" )
+		DiscoveredEquipments.remove( "ZIGBEE", IEEEAddress )
+		-- TODO : do something on known equipments ?
 		return true
 	end,
 
@@ -1691,7 +1752,7 @@ ZIGATE_MESSAGE = {
 		local sqn = payload:byte( 1 )
 		local address = string_toHex( payload:sub( 2, 3 ) ) -- ZigBee address
 		local endpointId = string_toHex( payload:sub( 4, 4 ) )
-		local msg = "Attribute Report: (address:0x".. address .. "), (endpoint:0x" .. endpointId .. ")"
+		local msg = "Attribute Report: (address:".. address .. "),(endpointId:" .. endpointId .. ")"
 		local clusterId = string_toHex( payload:sub( 5, 6 ) )
 		local attrId = string_toHex( payload:sub( 7, 8 ) )
 		local attrStatus = payload:byte( 9 )
@@ -1701,16 +1762,16 @@ ZIGATE_MESSAGE = {
 		local attrValue = _getAttrValue( attrType, attrData )
 		local clusterInfos = CAPABILITIES[ clusterId ]
 		if clusterInfos then
-			msg = msg .. ", (cluster:0x" .. clusterId .. ")"
+			msg = msg .. ",(cluster:" .. clusterId .. ")"
 			local attrInfos = clusterInfos.attributes[ endpointId .. "-" .. attrId ] or clusterInfos.attributes[ attrId ]
 			if attrInfos then
-				msg = msg .. ", (attrId:0x" .. attrId .. ";" .. tostring(attrInfos.name) .. ")"
+				msg = msg .. ",(attrId:" .. attrId .. ";" .. tostring(attrInfos.name) .. ")"
 				local cmds = attrInfos.getCommands( attrValue )
 				if ( cmds and #cmds > 0 ) then
 					--debug( tostring(#cmds) .. " command(s)", "Network.receive" )
 					for i, cmd in ipairs( cmds ) do
 						if ( cmd.name ~= "not_implemented" ) then
-							debug( msg .. ", (command:" .. tostring(cmd.name) .. ( cmd.broadcast and " BROADCAST" or "" ) .. "), (data:" .. tostring(cmd.data) .. "), (info:" .. tostring(cmd.info) .. ")", "Network.receive" )
+							debug( msg .. ",(command:" .. tostring(cmd.name) .. ( cmd.broadcast and " BROADCAST" or "" ) .. "),(data:" .. tostring(cmd.data) .. "),(info:" .. tostring(cmd.info) .. ")", "Network.receive" )
 							Tools.pcall( Commands.add, "ZIGBEE", nil, address, endpointId, { capability = { name = attrInfos.name, modelings = attrInfos.modelings }, quality = quality }, cmd )
 						else
 							warning( msg .. " - Not implemented" , "Network.receive" )
@@ -1722,21 +1783,21 @@ ZIGATE_MESSAGE = {
 					return false
 				end
 			else
-				warning( msg .. " - (attrId:0x" .. attrId .. ") is not handled" , "Network.receive" )
+				warning( msg .. " - (attrId:" .. attrId .. ") is not handled" , "Network.receive" )
 				return false
 			end
 		else
-			warning( msg .. " - (cluster:0x" .. clusterId .. ") is not handled", "Network.receive" )
+			warning( msg .. " - (cluster:" .. clusterId .. ") is not handled", "Network.receive" )
 			return false
 		end
 		return true
 	end,
 
-	-- Router Discover
+	-- Route Discovery Confirm
 	["8701"] = function( payload, quality )
-		local status = _getAttrValue( ATTR_TYPES.uint8, payload:sub( 1, 1 ) )
-		local networkStatus = _getAttrValue( ATTR_TYPES.uint8, payload:sub( 2, 2 ) )
-		debug( "Router Discover: (status:" .. tostring(ZIGBEE_STATUS[tostring(status)]) .. "), (networkStatus:" .. tostring(networkStatus) .. ")", "Network.receive" )
+		local status = payload:byte( 1 )
+		local networkStatus = payload:byte( 2 )
+		debug( "Route Discovery Confirm: (status:" .. tostring(ZIGBEE_STATUS[tostring(status)]) .. "),(networkStatus:" .. tostring(networkStatus) .. ")", "Network.receive" )
 		return true
 	end
 }
@@ -1899,12 +1960,12 @@ Network = {
 			elseif ( string.len(payload) + 1 ~= msgLen ) then
 				error( "Incoming message is corrupted (expected length: " .. tostring(msgLen - 1) .. ", received: " .. tostring(string.len(payload)) .. ") : " .. string_formatToHex(_buffer), "Network.receive" )
 			elseif ZIGATE_MESSAGE[msgType] then
-				--debug( "(type:0x" .. tostring(msgType) .. "), (payload:" .. string_formatToHex(payload) .. ")", "Network.receive" )
+				debug( "<-- (type:" .. tostring(msgType) .. "),(payload:" .. string_formatToHex( payload, "" ) .. ")", "Network.receive" )
 				if not ZIGATE_MESSAGE[msgType]( payload, quality ) then
-					warning( "Problem with message (type:0x" .. tostring(msgType) .. "), (payload:" .. string_formatToHex(payload) .. ")", "Network.receive" )
+					warning( "Problem with message (type:" .. tostring(msgType) .. "), (payload:" .. string_formatToHex( payload, "" ) .. ")", "Network.receive" )
 				end
 			else
-				warning( "Unknown message (type:0x" .. tostring(msgType) .. "), (payload:" .. string_formatToHex(payload) .. ")", "Network.receive" )
+				warning( "Unknown message (type:" .. tostring(msgType) .. "), (payload:" .. string_formatToHex( payload, "" ) .. ")", "Network.receive" )
 			end
 
 		elseif ( rxByte == 2 ) then
@@ -1933,7 +1994,7 @@ Network = {
 		--debug("chk: ".. tostring(_getChecksum( command .. length .. payload )), "Network.send")
 		local packet = string.char(1) .. _transcode( command .. length .. string.char( _getChecksum( command .. length .. payload ) ) .. payload ) .. string.char(3)
 
-		debug( "(type:0x" .. tostring(hexCmd) .. "), (payload:" .. tostring(hexData) .. ")", "Network.send" )
+		debug( "--> (type:" .. tostring(hexCmd) .. "),(payload:" .. tostring(hexData) .. ")", "Network.send" )
 		table.insert( _messageToSendQueue, packet )
 		if not _isSendingMessage then
 			Network.flush()
@@ -1954,8 +2015,7 @@ Network = {
 
 		_isSendingMessage = true
 		while _messageToSendQueue[1] do
-			debug( "Send message: ".. string_formatToHex(_messageToSendQueue[1]), "Network.flush" )
-			--debug( "Send message: " .. _messageToSendQueue[1], "Network.flush" )
+			--debug( "Send message: ".. string_formatToHex(_messageToSendQueue[1]), "Network.flush" )
 			if not luup.io.write( _messageToSendQueue[1] ) then
 				error( "Failed to send packet", "Network.flush" )
 				_isSendingMessage = false
@@ -2274,23 +2334,27 @@ DiscoveredEquipments = {
 				hasCapabilityBeenAdded = true
 			end
 
-			-- Feature
-			for _, modeling in ipairs( capability.modelings ) do
-				for _, mapping in ipairs( modeling.mappings ) do
-					local feature = mapping.features[ featureName ]
-					if feature then
-						-- This mapping contains our feature
-						isFeatureKnown = true
-						if mapping.deviceTypes then
-							mapping.isUsed = true
-							feature.data = data
-							feature.unit = unit
-							modeling.isUsed = true
+			if ( #capability.modelings > 0 ) then
+				-- Feature
+				for _, modeling in ipairs( capability.modelings ) do
+					for _, mapping in ipairs( modeling.mappings ) do
+						local feature = mapping.features[ featureName ]
+						if feature then
+							-- This mapping contains our feature
+							isFeatureKnown = true
+							if mapping.deviceTypes then
+								mapping.isUsed = true
+								feature.data = data
+								feature.unit = unit
+								modeling.isUsed = true
+							end
+							-- The features are unique in each modeling
+							break
 						end
-						-- The features are unique in each modeling
-						break
 					end
 				end
+			else
+				capability.data = data
 			end
 		end
 
@@ -2554,8 +2618,11 @@ Equipments = {
 	changeAddress = function( equipment, newAddress )
 		local formerAddress = equipment.address
 		debug( "Change address of " .. Tools.getEquipmentSummary(equipment) .. " to " .. tostring(newAddress), "Equipments.changeAddress" )
+		equipment.address = tostring(newAddress)
+		_indexEquipmentsByProtocolAddress[ equipment.protocol .. ";" .. formerAddress ] = nil
+		_indexEquipmentsByProtocolAddress[ equipment.protocol .. ";" .. equipment.address ] = equipment
 		for _, mapping in ipairs( equipment.mappings ) do
-			Variable.set( mapping.device.id, "ADDRESS", newAddress )
+			Variable.set( mapping.device.id, "ADDRESS", equipment.address )
 		end
 	end
 }
