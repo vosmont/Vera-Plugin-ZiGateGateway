@@ -142,14 +142,18 @@ Association means that changes on the ZigBee device will be passed on the associ
 ## Logs
 
 You can control your rules execution in the logs. Just set the variable "DebugMode" to 1.
-Then in a ssh terminal :
 
-- on legacy Vera :
+- on legacy Vera (ssh terminal):
 ```
 tail -f /var/log/cmh/LuaUPnP.log | grep "^01\|ZiGateGateway"
 ```
 
-- on openLuup :
+- on legacy Vera (http):
+```
+ http://vera_ip/cgi-bin/cmh/log.sh?Device=LuaUPnP
+```
+
+- on openLuup (ssh terminal):
 ```
 tail -F {openLuup folder}/cmh-ludl/logs/LuaUPnP.log | grep "ERROR\|ZiGateGateway"
 ```
