@@ -138,6 +138,16 @@ Then select the compatible devices and validate.
 
 Association means that changes on the ZigBee device will be passed on the associated device (e.g. if the ZigBee device is switched on, the associated device is switched on too).
 
+## Known working equipements
+
+Vendor | Model | Comment
+------------ | ----- | -------
+Xiaomi | Aqara smart cube |
+Xiaomi | Aqara smart wireless switch |
+Xiaomi | Aqara motion sensor |
+Xiaomi | Aqara weather sensor |
+Xiaomi | Aqara door/window sensor |
+Xiaomi | Aqara vibration sensor | Only vibrations for the moment
 
 ## Logs
 
