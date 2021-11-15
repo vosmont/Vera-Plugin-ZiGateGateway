@@ -1,3 +1,6 @@
+**This plugin is no longer maintained**
+
+
 # <img align="left" src="media/zigate_gateway_logo.png"> Vera-Plugin-ZiGateGateway
 
 **Control your ZigBee devices from your Vera**
